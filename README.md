@@ -1,18 +1,26 @@
 # 3DGenomeHub
 
-3DGenomeHub 是一个面向三维基因组研究的开箱即用知识库项目，聚合了基础教育资源、科研综述以及机器学习/深度学习在三维基因组领域的算法论文、工具与数据集。项目旨在帮助初学者（含小学、初中阶段）和科研人员快速获取可复用的知识资产，并提供构建 AI 驱动问答与检索的参考实现。
+3DGenomeHub is an opinionated starter kit for building an approachable knowledge
+base around 3D genome science. It curates beginner-friendly explainers,
+self-paced courses, interactive activities, and research primers so that new
+practitioners can build confidence before diving into primary literature.
 
-## 功能概览
+## Key Features
 
-- 📚 **分层知识结构**：面向低年级学生的科普课程、进阶学习单元与研究综述。
-- 🧠 **AI 检索能力**：基于 TF-IDF 的语义检索示例，可扩展至大语言模型与向量数据库。
-- 🧪 **研究资源汇总**：整理机器学习/深度学习算法在三维基因组中的经典论文、开源工具与数据集。
-- 🛠️ **数据构建流水线**：提供数据标注模板、批量导入脚本以及索引构建流程。
-- 🌐 **API 与 CLI**：FastAPI 服务用于知识检索，Typer CLI 支持数据导入、索引重建与导出。
+- 📚 **Beginner-first curation**: English-language resources designed for adult
+  learners and early-career scientists who are new to spatial genomics.
+- 🔎 **Built-in semantic search**: TF–IDF retrieval with extensible embedding
+  hooks so you can plug in vector databases or LLM rerankers later.
+- 🌐 **Web workspace**: FastAPI-powered web app with search, filtering, and a
+  one-click "Update knowledge base" workflow.
+- 🧪 **Data pipelines**: YAML import/export templates, ingestion utilities, and
+  a refresh pipeline that aggregates the latest open-access literature.
+- 🛠️ **CLI & API**: Typer command line helpers and documented REST endpoints for
+  automation or integration into other tools.
 
-## 快速开始
+## Quick Start
 
-### 1. 克隆与安装依赖
+### 1. Set up the environment
 
 ```bash
 python -m venv .venv
@@ -20,26 +28,23 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. 构建示例知识库
+### 2. Build the sample knowledge base
 
 ```bash
 three-d-genome-hub ingest data/sample-data.yml --database data/knowledge_base.db
 three-d-genome-hub build-index --database data/knowledge_base.db --output data/artifacts/vector_index.pkl
 ```
 
-### 3. 启动 API 服务
+### 3. Launch the web workspace
 
 ```bash
 uvicorn three_d_genome_hub.api.server:app --reload --port 8000
 ```
 
-启动后访问 `http://localhost:8000/docs` 体验交互式文档。也可使用 CLI 查询：
+Visit `http://localhost:8000/` to use the search interface or explore the API
+schema at `http://localhost:8000/docs`.
 
-```bash
-three-d-genome-hub query "什么是三维基因组？"
-```
-
-## 项目结构
+## Project Structure
 
 ```text
 ├── README.md
@@ -73,33 +78,41 @@ three-d-genome-hub query "什么是三维基因组？"
         └── models.py
 ```
 
-## 数据来源与内容类型
+## Content Types
 
-项目提供 `data/sample-data.yml` 示例，涵盖以下类别：
+The curated dataset focuses on three pillars that support beginners:
 
-- **Foundations**：面向低年级学生的科普课程与实验活动。
-- **Advanced-Topics**：围绕染色质高级结构、Hi-C 技术及其分析的资源。
-- **ML-DL-Research**：收录深度学习和机器学习方法（如 Graph Neural Networks、Transformers、Diffusion 模型）在三维基因组的代表性论文。
+- **Foundations** – explainer articles, glossaries, podcasts, and hands-on
+  activities that introduce core vocabulary and concepts.
+- **Data-Exploration** – tutorials, workshops, and practical checklists for
+  working with Hi-C and other 3D genomics data products.
+- **Research-Summaries** – accessible overviews of influential papers and
+  perspectives that keep learners informed without demanding deep expertise.
 
-> **提示**：可根据模板扩展更多条目，或使用 `ingestion/curate.py` 中的脚本接入外部数据源（如 CrossRef、arXiv API）。
+> Tip: extend `data/sample-data.yml` with your own entries or connect
+> `pipelines/update.py` to additional APIs (e.g., Crossref, arXiv, bioRxiv).
 
-## 开发路线图
+## Roadmap
 
-- [x] 提供分层知识结构与样例数据
-- [x] 构建 TF-IDF 检索索引与 API
-- [ ] 集成向量数据库（如 Qdrant、Milvus）支持更大规模语义检索
-- [ ] 联合 LLM（OpenAI、DeepSeek 等）构建问答助手与课程生成工具
-- [ ] 构建可视化前端（Timeline、知识图谱）
+- [x] Provide beginner-centric curation and sample data.
+- [x] Ship TF–IDF retrieval, REST API, and a searchable web workspace.
+- [ ] Integrate a vector database (Qdrant, Milvus) for large-scale semantic
+      search.
+- [ ] Pair the knowledge base with LLM-powered copilots for Q&A and content
+      authoring.
+- [ ] Add data visualizations such as timelines and knowledge graphs.
 
-## 贡献指南
+## Contributing
 
-欢迎通过 Issue/PR 扩充资料、改进算法与教学内容。可遵循以下步骤：
+We welcome pull requests that add resources, improve the update pipeline, or
+expand the web workspace. To contribute:
 
-1. Fork 本仓库并创建新分支
-2. 编写或更新文档/代码
-3. 运行 `pytest`（未来支持）或手动测试 CLI/API
-4. 提交 PR，描述改动范围与测试情况
+1. Fork the repository and create a topic branch.
+2. Add or update documentation, data, or code.
+3. Run the available CLI/API smoke tests.
+4. Open a pull request detailing your changes and validation steps.
 
-## 许可证
+## License
 
-项目在 MIT License 下发布。欢迎自由使用与分发。
+Released under the MIT License. You are free to use, remix, and share the
+knowledge base for educational or research purposes.
