@@ -1,0 +1,163 @@
+metadata:
+  version: 1.0.0
+  generated_at: 2025-02-10
+  curated_by: 3DGenomeHub Team
+resources:
+  - id: FND-001
+    title: "DNA 的三维折叠：课堂演示"
+    type: lesson
+    level: primary
+    category: Foundations
+    summary: >-
+      通过彩纸和毛根展示 DNA 如何在细胞核中折叠，帮助小学高年级学生理解染色质的空间结构。
+    tags: [DNA, Chromatin, Hands-on]
+    author: "3DGenomeHub Curriculum"
+    source: "In-house"
+    url: "https://example.org/dna-folding-activity"
+    language: zh
+    duration_minutes: 30
+    learning_objectives:
+      - 认识 DNA 与染色质的关系
+      - 描述细胞核如何容纳长链 DNA
+    assets:
+      - type: worksheet
+        title: "DNA 折纸模板"
+        url: "https://example.org/assets/dna-template.pdf"
+
+  - id: FND-002
+    title: "Hi-C 冒险故事"
+    type: story
+    level: primary
+    category: Foundations
+    summary: >-
+      通过拟人化的 DNA 链讲述 Hi-C 实验的基本原理，适合低年级科普阅读。
+    tags: [Hi-C, Story, Introductory]
+    author: "Genome Tales Studio"
+    source: "Open License"
+    url: "https://example.org/hic-story"
+    language: zh
+    recommended_age: "8-12"
+
+  - id: ADV-101
+    title: "Hi-C 数据可视化入门"
+    type: workshop
+    level: secondary
+    category: Advanced-Topics
+    summary: >-
+      介绍 Hi-C 矩阵的基本结构与常用可视化工具，包括 Juicebox 与 HiGlass 的操作示例。
+    tags: [Hi-C, Visualization, Workshop]
+    author: "Dr. Liu"
+    source: "Public Lecture"
+    url: "https://example.org/hic-visualization"
+    language: zh
+    prerequisites:
+      - 基础分子生物学
+      - Python 基础
+    datasets:
+      - name: "4D Nucleome Demo"
+        url: "https://4dnucleome.org"
+
+  - id: ADV-205
+    title: "Chromatin Looping 与调控网络"
+    type: lecture
+    level: undergraduate
+    category: Advanced-Topics
+    summary: >-
+      系统介绍染色质圈环、TAD 以及调控元件互作，对应的实验证据与计算模型。
+    tags: [Chromatin Loop, TAD]
+    author: "Prof. Zhang"
+    source: "University Course"
+    url: "https://example.org/chromatin-looping"
+    language: zh
+    slides: "https://example.org/slides/chromatin-looping.pdf"
+
+  - id: ML-301
+    title: "DeepHiC: A Generative Adversarial Network for Enhancing Hi-C Data"
+    type: paper
+    level: research
+    category: ML-DL-Research
+    summary: >-
+      利用 GAN 提升低测序深度 Hi-C 数据的分辨率，为结构变异检测提供更清晰的矩阵。
+    tags: [GAN, Hi-C, Enhancement]
+    author: "Zhang et al."
+    source: "Nature Communications"
+    year: 2019
+    doi: "10.1038/s41467-019-XXXX-X"
+    url: "https://www.nature.com/articles/s41467-019-XXXX-X"
+    code: "https://github.com/omegafold/DeepHiC"
+
+  - id: ML-315
+    title: "Akita: Learning 3D Genome Folding from Sequence"
+    type: paper
+    level: research
+    category: ML-DL-Research
+    summary: >-
+      Google DeepMind 的 CNN 模型 Akita 能够从 DNA 序列直接预测局部 Hi-C 接触图，实现端到端结构预测。
+    tags: [CNN, Genome Folding, Prediction]
+    author: "Fudenberg et al."
+    source: "Nature"
+    year: 2020
+    doi: "10.1038/s41586-020-XXXX-X"
+    url: "https://www.nature.com/articles/s41586-020-XXXX-X"
+    code: "https://github.com/deepmind/akita"
+
+  - id: ML-342
+    title: "Graph Neural Networks for Chromatin Interaction Prediction"
+    type: paper
+    level: research
+    category: ML-DL-Research
+    summary: >-
+      综述图神经网络在预测染色质互作中的应用，包括节点嵌入、图注意力与图生成模型。
+    tags: [Graph Neural Network, Review]
+    author: "Wang & Li"
+    source: "Briefings in Bioinformatics"
+    year: 2021
+    doi: "10.1093/bib/bbabXXX"
+    url: "https://academic.oup.com/bib/article/XX/XX/bbabXXX"
+
+  - id: ML-360
+    title: "Diffusion Models for 3D Genome Structure Reconstruction"
+    type: preprint
+    level: research
+    category: ML-DL-Research
+    summary: >-
+      引入扩散模型生成高分辨率的三维基因组结构，支持多模态约束与不确定性评估。
+    tags: [Diffusion, Structure Reconstruction]
+    author: "Chen et al."
+    source: "bioRxiv"
+    year: 2024
+    url: "https://www.biorxiv.org/content/10.1101/2024.01.01.123456v1"
+
+  - id: TOOLS-010
+    title: "Open3DGenome Toolkit"
+    type: software
+    level: research
+    category: ML-DL-Research
+    summary: >-
+      一个集成 Hi-C 预处理、结构建模与可视化的开源工具箱，支持 Python API 与命令行使用。
+    tags: [Toolkit, Visualization, Pipeline]
+    author: "Open3DGenome Community"
+    source: "GitHub"
+    url: "https://github.com/open3dgenome/toolkit"
+    license: MIT
+
+  - id: EDU-500
+    title: "高中生三维基因组探究课程"
+    type: curriculum
+    level: secondary
+    category: Advanced-Topics
+    summary: >-
+      为期四周的项目式课程，结合实验、编程与数据分析活动，引导学生完成三维基因组研究的小课题。
+    tags: [Project-based Learning, Hi-C]
+    author: "Beijing STEM Alliance"
+    source: "Curriculum Pack"
+    url: "https://example.org/3dgenome-curriculum"
+    modules:
+      - name: "模块 1：染色质世界"
+        duration_hours: 4
+      - name: "模块 2：Hi-C 数据采集"
+        duration_hours: 6
+      - name: "模块 3：机器学习入门"
+        duration_hours: 6
+      - name: "模块 4：成果展示"
+        duration_hours: 4
