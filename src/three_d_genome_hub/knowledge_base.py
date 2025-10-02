@@ -14,6 +14,7 @@ from .config import DEFAULT_DATA_FILE, DEFAULT_DB_PATH, DEFAULT_INDEX_PATH
 from .ingestion.loader import KnowledgeBaseRepository, ingest_bundle
 from .ingestion.schema import KnowledgeBaseBundle, load_bundle
 from .models import Resource
+from .pipelines.update import refresh_knowledge_base
 from .utils.embeddings import TfidfEmbeddingStore
 from .utils.logging import configure_logging
 
@@ -103,6 +104,17 @@ class KnowledgeBase:
         df = self.repository.search_by_keyword(keyword)
         return [row_to_resource(row) for _, row in df.iterrows()]
 
+    # ------------------------------------------------------------------
+    # Refresh workflows
+    # ------------------------------------------------------------------
+    def refresh(self, search_terms: Optional[Iterable[str]] = None) -> int:
+        """Update the repository by combining curated data with live sources."""
+
+        terms: Iterable[str] = search_terms or ("3D genome", "chromatin architecture")
+        count = refresh_knowledge_base(self.repository, search_terms=tuple(terms))
+        self.build_index(self.index_path)
+        return count
+
 
 # ----------------------------------------------------------------------
 # Helpers
@@ -156,10 +168,10 @@ def bootstrap_sample_database() -> KnowledgeBase:
     kb = KnowledgeBase(repo, index_path=DEFAULT_INDEX_PATH)
     if not DEFAULT_DB_PATH.exists():
         kb.ingest_default_sample()
-    if not DEFAULT_INDEX_PATH.exists():
-        kb.build_index(DEFAULT_INDEX_PATH)
-    else:
+    if DEFAULT_INDEX_PATH.exists():
         kb.load_index(DEFAULT_INDEX_PATH)
+    else:
+        kb.build_index(DEFAULT_INDEX_PATH)
     return kb
 
 

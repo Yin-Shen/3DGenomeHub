@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>3DGenomeHub Knowledge Base</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #0f172a;
+        color: #e2e8f0;
+      }
+      body {
+        margin: 0;
+        padding: 2rem;
+        display: flex;
+        flex-direction: column;
+        gap: 2rem;
+      }
+      header {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+      }
+      .title {
+        font-size: 1.8rem;
+        font-weight: 700;
+      }
+      .subtitle {
+        max-width: 50rem;
+        line-height: 1.6;
+        color: #cbd5f5;
+      }
+      form.search {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+        gap: 1rem;
+        align-items: end;
+      }
+      label {
+        display: flex;
+        flex-direction: column;
+        gap: 0.4rem;
+        font-size: 0.9rem;
+        color: #bfdbfe;
+      }
+      input[type="text"],
+      select {
+        background: rgba(15, 23, 42, 0.8);
+        border: 1px solid rgba(148, 163, 184, 0.3);
+        border-radius: 0.6rem;
+        padding: 0.65rem 0.8rem;
+        color: inherit;
+      }
+      button {
+        border: none;
+        border-radius: 0.6rem;
+        padding: 0.75rem 1.4rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: transform 0.1s ease, box-shadow 0.1s ease;
+      }
+      button.primary {
+        background: linear-gradient(135deg, #38bdf8, #6366f1);
+        color: #0f172a;
+        box-shadow: 0 12px 30px rgba(99, 102, 241, 0.3);
+      }
+      button.secondary {
+        background: rgba(148, 163, 184, 0.2);
+        color: inherit;
+        border: 1px solid rgba(148, 163, 184, 0.3);
+      }
+      button:hover {
+        transform: translateY(-1px);
+      }
+      .status {
+        padding: 0.75rem 1rem;
+        border-radius: 0.75rem;
+        background: rgba(34, 197, 94, 0.2);
+        color: #bbf7d0;
+        font-weight: 500;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+        gap: 1.5rem;
+      }
+      article.card {
+        background: rgba(15, 23, 42, 0.85);
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        border-radius: 1rem;
+        padding: 1.5rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+        box-shadow: 0 16px 40px rgba(15, 23, 42, 0.45);
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        background: rgba(59, 130, 246, 0.15);
+        color: #bfdbfe;
+        border-radius: 999px;
+        padding: 0.25rem 0.75rem;
+        font-size: 0.75rem;
+        font-weight: 600;
+      }
+      .tag-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+      }
+      .tag {
+        background: rgba(99, 102, 241, 0.2);
+        color: #e0e7ff;
+        padding: 0.2rem 0.6rem;
+        border-radius: 999px;
+        font-size: 0.7rem;
+      }
+      a.more {
+        align-self: flex-start;
+        text-decoration: none;
+        color: #38bdf8;
+        font-weight: 600;
+      }
+      footer {
+        font-size: 0.8rem;
+        color: #94a3b8;
+        text-align: center;
+        margin-top: 1rem;
+      }
+      @media (max-width: 600px) {
+        body {
+          padding: 1.5rem;
+        }
+        header {
+          flex-direction: column;
+          align-items: flex-start;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <div class="title">3DGenomeHub Knowledge Base</div>
+        <p class="subtitle">
+          Discover beginner-friendly explainers, toolkits, and research primers about the 3D genome.
+        </p>
+      </div>
+      <form method="post" action="/update">
+        <button class="primary" type="submit">🔄 Update knowledge base</button>
+      </form>
+    </header>
+
+    {% if status %}
+      <div class="status">Update in progress – refresh in a few moments to see new resources.</div>
+    {% endif %}
+
+    <section>
+      <form class="search" method="get" action="/">
+        <label>
+          Keyword
+          <input type="text" name="q" placeholder="Search summaries, skills, or tools" value="{{ query }}" />
+        </label>
+        <label>
+          Category
+          <select name="category">
+            <option value="">All categories</option>
+            {% for item in categories %}
+              <option value="{{ item }}" {% if item == category %}selected{% endif %}>{{ item }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          Level
+          <select name="level">
+            <option value="">All levels</option>
+            {% for item in levels %}
+              <option value="{{ item }}" {% if item == level %}selected{% endif %}>{{ item }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button class="secondary" type="submit">Search</button>
+      </form>
+      <p style="margin-top: 1rem; color: #94a3b8;">Showing {{ result_count }} resource(s).</p>
+    </section>
+
+    <section class="grid">
+      {% for resource in resources %}
+        <article class="card">
+          <div class="badge">{{ resource.category }} • {{ resource.level|capitalize }}</div>
+          <h2>{{ resource.title }}</h2>
+          <p>{{ resource.summary }}</p>
+          {% if resource.learning_objectives %}
+            <details>
+              <summary style="cursor: pointer;">Learning objectives</summary>
+              <ul>
+                {% for item in resource.learning_objectives %}
+                  <li>{{ item }}</li>
+                {% endfor %}
+              </ul>
+            </details>
+          {% endif %}
+          {% if resource.tags %}
+            <div class="tag-list">
+              {% for tag in resource.tags %}
+                <span class="tag">#{{ tag }}</span>
+              {% endfor %}
+            </div>
+          {% endif %}
+          {% if resource.url %}
+            <a class="more" href="{{ resource.url }}" target="_blank" rel="noopener">Open resource →</a>
+          {% endif %}
+        </article>
+      {% endfor %}
+      {% if resources|length == 0 %}
+        <article class="card">
+          <h2>No resources found</h2>
+          <p>Try clearing your filters or use a broader keyword to explore the full library.</p>
+        </article>
+      {% endif %}
+    </section>
+
+    <footer>
+      Built with ❤️ by the 3DGenomeHub team. Data refresh pulls curated content and live open-access sources.
+    </footer>
+  </body>
+</html>
