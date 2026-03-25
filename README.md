@@ -59,6 +59,18 @@ The workflow runs **every Monday** automatically:
 
 ## Quick Start
 
+### Option 1: Windows EXE (Easiest)
+
+```
+1. Install Python 3.9+ from https://python.org (check "Add to PATH")
+2. Download this repository (Code → Download ZIP → unzip)
+3. Double-click build_exe.bat
+4. After build, double-click dist/3DGenomeHub.exe
+5. Browser opens automatically — click buttons to use!
+```
+
+### Option 2: Run directly with Python
+
 ```bash
 # Clone the repository
 git clone https://github.com/Yin-Shen/3DGenomeHub.git
