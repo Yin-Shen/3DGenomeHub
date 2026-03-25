@@ -341,6 +341,216 @@ def fetch_arxiv(query: str, max_results: int = config.MAX_RESULTS_PER_QUERY) -> 
 
 
 # ---------------------------------------------------------------------------
+# Semantic Scholar API
+# ---------------------------------------------------------------------------
+
+SEMANTIC_SCHOLAR_API = "https://api.semanticscholar.org/graph/v1/paper/search"
+
+
+def fetch_semantic_scholar(query: str, max_results: int = config.MAX_RESULTS_PER_QUERY) -> list[dict[str, Any]]:
+    """Search Semantic Scholar for papers matching the query."""
+    papers: list[dict[str, Any]] = []
+    try:
+        params = {
+            "query": query,
+            "limit": str(min(max_results, 100)),
+            "fields": "title,authors,abstract,year,externalIds,venue,publicationDate,url",
+        }
+        with httpx.Client(timeout=_TIMEOUT, headers=_HEADERS) as client:
+            resp = client.get(SEMANTIC_SCHOLAR_API, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+
+        for item in data.get("data", []):
+            title = item.get("title", "")
+            if not title:
+                continue
+
+            external_ids = item.get("externalIds") or {}
+            doi = external_ids.get("DOI", "")
+            pmid = external_ids.get("PubMed", "")
+            arxiv_id = external_ids.get("ArXiv", "")
+
+            paper_id = doi if doi else (f"pmid:{pmid}" if pmid else (f"arxiv:{arxiv_id}" if arxiv_id else f"s2:{item.get('paperId', '')}"))
+
+            authors = []
+            for a in item.get("authors") or []:
+                name = a.get("name", "")
+                if name:
+                    authors.append(name)
+
+            pub_date = item.get("publicationDate", "")
+            year = item.get("year") or (int(pub_date[:4]) if pub_date and len(pub_date) >= 4 else datetime.now().year)
+
+            url = f"https://doi.org/{doi}" if doi else (item.get("url") or "")
+
+            papers.append({
+                "id": paper_id,
+                "title": _clean_text(title),
+                "authors": authors,
+                "abstract": _clean_text(item.get("abstract") or ""),
+                "journal": item.get("venue") or "",
+                "year": year,
+                "date": pub_date or f"{year}-01-01",
+                "doi": doi,
+                "url": url,
+                "source": "semantic_scholar",
+                "categories": [],
+                "fetched_at": datetime.now(timezone.utc).isoformat(),
+            })
+
+    except Exception:
+        logger.exception("Semantic Scholar fetch failed for query: %s", query)
+
+    return papers
+
+
+# ---------------------------------------------------------------------------
+# Europe PMC API
+# ---------------------------------------------------------------------------
+
+EUROPEPMC_API = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+
+
+def fetch_europepmc(query: str, max_results: int = config.MAX_RESULTS_PER_QUERY) -> list[dict[str, Any]]:
+    """Search Europe PMC for papers matching the query."""
+    papers: list[dict[str, Any]] = []
+    try:
+        params = {
+            "query": query,
+            "format": "json",
+            "pageSize": str(min(max_results, 100)),
+            "sort": "date",
+            "resultType": "core",
+        }
+        with httpx.Client(timeout=_TIMEOUT, headers=_HEADERS) as client:
+            resp = client.get(EUROPEPMC_API, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+
+        for item in data.get("resultList", {}).get("result", []):
+            title = item.get("title", "")
+            if not title:
+                continue
+
+            doi = item.get("doi", "")
+            pmid = item.get("pmid", "")
+            paper_id = doi if doi else (f"pmid:{pmid}" if pmid else f"epmc:{item.get('id', '')}")
+
+            authors = []
+            for a in (item.get("authorList") or {}).get("author") or []:
+                name = a.get("fullName", "")
+                if name:
+                    authors.append(name)
+
+            pub_date = item.get("firstPublicationDate", "")
+            year_str = item.get("pubYear", "")
+            year = int(year_str) if year_str and year_str.isdigit() else datetime.now().year
+
+            abstract = item.get("abstractText", "")
+            journal = item.get("journalTitle", "")
+
+            url = f"https://doi.org/{doi}" if doi else f"https://europepmc.org/article/MED/{pmid}"
+
+            papers.append({
+                "id": paper_id,
+                "title": _clean_text(title),
+                "authors": authors,
+                "abstract": _clean_text(abstract),
+                "journal": journal,
+                "year": year,
+                "date": pub_date or f"{year}-01-01",
+                "doi": doi,
+                "url": url,
+                "source": "europepmc",
+                "categories": [],
+                "fetched_at": datetime.now(timezone.utc).isoformat(),
+            })
+
+    except Exception:
+        logger.exception("Europe PMC fetch failed for query: %s", query)
+
+    return papers
+
+
+# ---------------------------------------------------------------------------
+# CrossRef API
+# ---------------------------------------------------------------------------
+
+CROSSREF_API = "https://api.crossref.org/works"
+
+
+def fetch_crossref(query: str, max_results: int = config.MAX_RESULTS_PER_QUERY) -> list[dict[str, Any]]:
+    """Search CrossRef for papers matching the query."""
+    papers: list[dict[str, Any]] = []
+    try:
+        params = {
+            "query": query,
+            "rows": str(min(max_results, 50)),
+            "sort": "published",
+            "order": "desc",
+            "select": "DOI,title,author,abstract,container-title,published,URL",
+        }
+        headers = {**_HEADERS, "Accept": "application/json"}
+        with httpx.Client(timeout=_TIMEOUT, headers=headers) as client:
+            resp = client.get(CROSSREF_API, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+
+        for item in data.get("message", {}).get("items", []):
+            titles = item.get("title", [])
+            title = titles[0] if titles else ""
+            if not title:
+                continue
+
+            doi = item.get("DOI", "")
+
+            authors = []
+            for a in item.get("author") or []:
+                given = a.get("given", "")
+                family = a.get("family", "")
+                if family:
+                    authors.append(f"{family} {given}".strip())
+
+            # Extract date
+            pub = item.get("published", {})
+            date_parts = pub.get("date-parts", [[]])
+            if date_parts and date_parts[0]:
+                parts = date_parts[0]
+                year = parts[0] if len(parts) > 0 else datetime.now().year
+                month = parts[1] if len(parts) > 1 else 1
+                day = parts[2] if len(parts) > 2 else 1
+                date_str = f"{year}-{str(month).zfill(2)}-{str(day).zfill(2)}"
+            else:
+                year = datetime.now().year
+                date_str = f"{year}-01-01"
+
+            journal_titles = item.get("container-title", [])
+            journal = journal_titles[0] if journal_titles else ""
+            abstract = _clean_text(item.get("abstract", "").replace("<jats:p>", "").replace("</jats:p>", "").replace("<jats:italic>", "").replace("</jats:italic>", ""))
+
+            papers.append({
+                "id": doi,
+                "title": _clean_text(title),
+                "authors": authors,
+                "abstract": abstract,
+                "journal": journal,
+                "year": year,
+                "date": date_str,
+                "doi": doi,
+                "url": f"https://doi.org/{doi}" if doi else item.get("URL", ""),
+                "source": "crossref",
+                "categories": [],
+                "fetched_at": datetime.now(timezone.utc).isoformat(),
+            })
+
+    except Exception:
+        logger.exception("CrossRef fetch failed for query: %s", query)
+
+    return papers
+
+
+# ---------------------------------------------------------------------------
 # Unified fetch interface
 # ---------------------------------------------------------------------------
 
@@ -348,6 +558,9 @@ FETCHER_MAP = {
     "pubmed": fetch_pubmed,
     "biorxiv": fetch_biorxiv,
     "arxiv": fetch_arxiv,
+    "semantic_scholar": fetch_semantic_scholar,
+    "europepmc": fetch_europepmc,
+    "crossref": fetch_crossref,
 }
 
 

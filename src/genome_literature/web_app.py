@@ -25,14 +25,11 @@ from .summarizer import generate_digest
 
 logger = logging.getLogger(__name__)
 
-# We use Python's built-in http.server to avoid extra dependencies
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
-import html as html_module
 
-# Global state
 _app_state: dict[str, Any] = {
-    "status": "idle",       # idle | fetching | done | error
+    "status": "idle",
     "message": "",
     "papers": [],
     "last_result": None,
@@ -40,16 +37,12 @@ _app_state: dict[str, Any] = {
 
 
 class GUIHandler(BaseHTTPRequestHandler):
-    """HTTP request handler for the web GUI."""
-
     def log_message(self, format, *args):
-        """Suppress default access logs."""
         pass
 
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
-
         if path == "/" or path == "":
             self._serve_home()
         elif path == "/api/status":
@@ -60,17 +53,38 @@ class GUIHandler(BaseHTTPRequestHandler):
             papers = load_papers()
             if papers:
                 categorize_papers(papers)
-                self._serve_json(get_statistics(papers))
+                stats = get_statistics(papers)
+                grouped = group_by_category(papers)
+                cat_counts = {k: len(v) for k, v in grouped.items()}
+                stats["category_counts"] = cat_counts
+                # year list
+                stats["years"] = sorted(stats.get("by_year", {}).keys(), reverse=True)
+                # source list
+                stats["sources"] = sorted(stats.get("by_source", {}).keys())
+                # category list
+                stats["categories"] = list(cat_counts.keys())
+                self._serve_json(stats)
             else:
-                self._serve_json({"total_papers": 0})
+                self._serve_json({"total_papers": 0, "categories": [], "years": [], "sources": []})
+        elif path == "/api/digest":
+            papers = load_papers()
+            new_papers = load_papers(config.NEW_PAPERS_JSON)
+            if papers:
+                categorize_papers(papers)
+                if new_papers:
+                    categorize_papers(new_papers)
+                digest = generate_digest(new_papers or [], papers)
+                self._serve_json(digest)
+            else:
+                self._serve_json({"summary_text": "No papers yet.", "statistics": {}})
+        elif path == "/api/export-csv":
+            self._handle_export_csv()
         else:
             self._serve_404()
 
     def do_POST(self):
         parsed = urlparse(self.path)
         path = parsed.path
-
-        # Read POST body
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length).decode("utf-8") if content_length else ""
 
@@ -86,23 +100,16 @@ class GUIHandler(BaseHTTPRequestHandler):
             params = parse_qs(body) if body else parse_qs(urlparse(self.path).query)
             query = params.get("q", [""])[0]
             self._handle_search(query)
-        elif path == "/api/export-csv":
-            self._handle_export_csv()
         else:
             self._serve_404()
-
-    # ------------------------------------------------------------------
-    # API handlers
-    # ------------------------------------------------------------------
 
     def _handle_fetch(self):
         if _app_state["status"] == "fetching":
             self._serve_json({"ok": False, "message": "Already fetching..."})
             return
-
         def do_fetch():
             _app_state["status"] = "fetching"
-            _app_state["message"] = "Fetching papers from PubMed, bioRxiv, arXiv..."
+            _app_state["message"] = "Fetching from PubMed, bioRxiv, arXiv, Semantic Scholar, Europe PMC, CrossRef..."
             try:
                 papers = fetch_all_papers()
                 categorize_papers(papers)
@@ -114,23 +121,16 @@ class GUIHandler(BaseHTTPRequestHandler):
                     save_papers(new_papers, config.NEW_PAPERS_JSON)
                 _app_state["status"] = "done"
                 _app_state["message"] = f"Done! Fetched {len(papers)} papers, {len(new_papers)} new. Total: {len(all_papers)}"
-                _app_state["papers"] = all_papers
-                _app_state["last_result"] = {
-                    "fetched": len(papers),
-                    "new": len(new_papers),
-                    "total": len(all_papers),
-                }
             except Exception as e:
                 _app_state["status"] = "error"
                 _app_state["message"] = f"Error: {e}"
-
         threading.Thread(target=do_fetch, daemon=True).start()
         self._serve_json({"ok": True, "message": "Fetching started..."})
 
     def _handle_update_readme(self):
         papers = load_papers()
         if not papers:
-            self._serve_json({"ok": False, "message": "No papers in database. Please fetch first."})
+            self._serve_json({"ok": False, "message": "No papers in database."})
             return
         categorize_papers(papers)
         content = generate_readme(papers)
@@ -150,29 +150,26 @@ class GUIHandler(BaseHTTPRequestHandler):
         if sent:
             self._serve_json({"ok": True, "message": "Email sent successfully!"})
         else:
-            self._serve_json({"ok": False, "message": "Failed to send email. Check SMTP configuration in .env file."})
+            self._serve_json({"ok": False, "message": "Failed to send. Check .env SMTP config."})
 
     def _handle_run_pipeline(self):
         if _app_state["status"] == "fetching":
-            self._serve_json({"ok": False, "message": "Pipeline already running..."})
+            self._serve_json({"ok": False, "message": "Already running..."})
             return
-
         def do_pipeline():
             _app_state["status"] = "fetching"
-            _app_state["message"] = "Running full pipeline..."
+            _app_state["message"] = "Running full pipeline (6 databases)..."
             try:
                 from .pipeline import run_pipeline
                 result = run_pipeline(skip_email=False, skip_readme=False)
                 _app_state["status"] = "done"
                 _app_state["message"] = (
-                    f"Pipeline done! Fetched {result.get('fetched_count', 0)} papers, "
+                    f"Pipeline done! Fetched {result.get('fetched_count', 0)}, "
                     f"{result.get('new_count', 0)} new. Total: {result.get('total_count', 0)}"
                 )
-                _app_state["last_result"] = result
             except Exception as e:
                 _app_state["status"] = "error"
                 _app_state["message"] = f"Error: {e}"
-
         threading.Thread(target=do_pipeline, daemon=True).start()
         self._serve_json({"ok": True, "message": "Pipeline started..."})
 
@@ -189,17 +186,16 @@ class GUIHandler(BaseHTTPRequestHandler):
             if score > 0:
                 results.append((score, p))
         results.sort(key=lambda x: x[0], reverse=True)
-        self._serve_json([p for _, p in results[:30]])
+        self._serve_json([p for _, p in results[:50]])
 
     def _handle_export_csv(self):
-        import csv
-        import io
+        import csv, io
         papers = load_papers()
         if not papers:
-            self._serve_error(400, "No papers to export")
+            self._serve_error(400, "No papers")
             return
         output = io.StringIO()
-        fields = ["title", "authors", "journal", "year", "date", "doi", "url", "source", "categories"]
+        fields = ["title", "authors", "journal", "year", "date", "doi", "url", "source", "categories", "abstract"]
         writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         for p in papers:
@@ -207,17 +203,11 @@ class GUIHandler(BaseHTTPRequestHandler):
             row["authors"] = "; ".join(p.get("authors", []))
             row["categories"] = "; ".join(p.get("categories", []))
             writer.writerow(row)
-        csv_content = output.getvalue()
-
         self.send_response(200)
         self.send_header("Content-Type", "text/csv; charset=utf-8")
-        self.send_header("Content-Disposition", "attachment; filename=papers_export.csv")
+        self.send_header("Content-Disposition", "attachment; filename=3DGenomeHub_papers.csv")
         self.end_headers()
-        self.wfile.write(csv_content.encode("utf-8"))
-
-    # ------------------------------------------------------------------
-    # Response helpers
-    # ------------------------------------------------------------------
+        self.wfile.write(output.getvalue().encode("utf-8"))
 
     def _serve_home(self):
         self.send_response(200)
@@ -243,35 +233,22 @@ class GUIHandler(BaseHTTPRequestHandler):
 
 
 def start_server(port: int = 8686, open_browser: bool = True):
-    """Start the web GUI server."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="[%(asctime)s] %(levelname)s %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        stream=sys.stderr,
-    )
-
+    logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S", stream=sys.stderr)
     server = HTTPServer(("0.0.0.0", port), GUIHandler)
     url = f"http://localhost:{port}"
     print(f"\n{'='*60}")
     print(f"  3D Genome & Deep Learning Literature Hub")
-    print(f"  Web GUI running at: {url}")
+    print(f"  Web GUI: {url}")
     print(f"  Press Ctrl+C to stop")
     print(f"{'='*60}\n")
-
     if open_browser:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
-
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nShutting down...")
         server.shutdown()
 
-
-# ------------------------------------------------------------------
-# HTML template (embedded to avoid external file dependency)
-# ------------------------------------------------------------------
 
 HOME_HTML = r"""<!DOCTYPE html>
 <html lang="en">
@@ -280,263 +257,363 @@ HOME_HTML = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>3D Genome & Deep Learning Literature Hub</title>
 <style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0b0f1a;color:#e2e8f0;min-height:100vh}
+a{color:#93c5fd;text-decoration:none}
+a:hover{text-decoration:underline}
 
-.header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; }
-.header h1 { font-size: 28px; font-weight: 700; margin-bottom: 8px; }
-.header p { opacity: 0.85; font-size: 15px; }
+.header{background:linear-gradient(135deg,#1e3a5f 0%,#4c1d95 50%,#831843 100%);padding:28px 20px;text-align:center}
+.header h1{font-size:26px;font-weight:700}
+.header p{opacity:0.8;font-size:14px;margin-top:6px}
 
-.container { max-width: 1100px; margin: 0 auto; padding: 20px; }
+.container{max-width:1300px;margin:0 auto;padding:16px}
 
-.status-bar {
-    background: #1e293b; border-radius: 10px; padding: 15px 20px;
-    margin-bottom: 20px; display: flex; align-items: center; gap: 12px;
-    border: 1px solid #334155;
-}
-.status-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
-.status-dot.idle { background: #94a3b8; }
-.status-dot.fetching { background: #fbbf24; animation: pulse 1s infinite; }
-.status-dot.done { background: #34d399; }
-.status-dot.error { background: #f87171; }
-@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-.status-text { font-size: 14px; color: #cbd5e1; }
+.status-bar{background:#131a2e;border-radius:8px;padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:10px;border:1px solid #1e293b}
+.status-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.status-dot.idle{background:#94a3b8}.status-dot.fetching{background:#fbbf24;animation:pulse 1s infinite}.status-dot.done{background:#34d399}.status-dot.error{background:#f87171}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+.status-text{font-size:13px;color:#94a3b8}
 
-.actions {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 12px; margin-bottom: 24px;
-}
-.btn {
-    padding: 14px 20px; border: none; border-radius: 10px; cursor: pointer;
-    font-size: 15px; font-weight: 600; color: white; transition: all 0.2s;
-    display: flex; align-items: center; gap: 8px; justify-content: center;
-}
-.btn:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(0,0,0,0.3); }
-.btn:active { transform: translateY(0); }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-.btn-fetch { background: linear-gradient(135deg, #667eea, #764ba2); }
-.btn-readme { background: linear-gradient(135deg, #06b6d4, #0891b2); }
-.btn-email { background: linear-gradient(135deg, #f59e0b, #d97706); }
-.btn-pipeline { background: linear-gradient(135deg, #10b981, #059669); }
-.btn-export { background: linear-gradient(135deg, #8b5cf6, #7c3aed); }
-.btn-search-go { background: linear-gradient(135deg, #ec4899, #db2777); padding: 14px 24px; }
+.actions{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
+.btn{padding:10px 16px;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;color:white;transition:all 0.15s;display:flex;align-items:center;gap:6px}
+.btn:hover{transform:translateY(-1px);box-shadow:0 3px 12px rgba(0,0,0,0.3)}
+.btn:disabled{opacity:0.4;cursor:not-allowed;transform:none}
+.btn-fetch{background:#4f46e5}.btn-readme{background:#0891b2}.btn-email{background:#d97706}.btn-pipeline{background:#059669}.btn-export{background:#7c3aed}
 
-.search-box {
-    display: flex; gap: 10px; margin-bottom: 24px;
-}
-.search-input {
-    flex: 1; padding: 14px 18px; border-radius: 10px; border: 1px solid #334155;
-    background: #1e293b; color: #e2e8f0; font-size: 15px; outline: none;
-}
-.search-input:focus { border-color: #667eea; }
+.main-grid{display:grid;grid-template-columns:280px 1fr;gap:14px}
+@media(max-width:900px){.main-grid{grid-template-columns:1fr}}
 
-.stats-grid {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 12px; margin-bottom: 24px;
-}
-.stat-card {
-    background: #1e293b; border-radius: 10px; padding: 20px; text-align: center;
-    border: 1px solid #334155;
-}
-.stat-number { font-size: 36px; font-weight: 700; color: #667eea; }
-.stat-label { font-size: 13px; color: #94a3b8; margin-top: 4px; }
+/* Sidebar */
+.sidebar{display:flex;flex-direction:column;gap:12px}
+.panel{background:#131a2e;border-radius:8px;padding:14px;border:1px solid #1e293b}
+.panel h3{font-size:14px;font-weight:600;color:#f1f5f9;margin-bottom:10px;display:flex;align-items:center;gap:6px}
 
-.section { margin-bottom: 24px; }
-.section h2 { font-size: 20px; margin-bottom: 12px; color: #f1f5f9; }
+.stats-mini{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.stat-mini{text-align:center;padding:10px 6px;background:#0b0f1a;border-radius:6px}
+.stat-mini .num{font-size:24px;font-weight:700;color:#818cf8}
+.stat-mini .lbl{font-size:11px;color:#64748b;margin-top:2px}
 
-.paper-list { display: flex; flex-direction: column; gap: 10px; }
-.paper-card {
-    background: #1e293b; border-radius: 10px; padding: 16px 20px;
-    border: 1px solid #334155; transition: border-color 0.2s;
-}
-.paper-card:hover { border-color: #667eea; }
-.paper-title { font-size: 15px; font-weight: 600; color: #f1f5f9; margin-bottom: 6px; }
-.paper-title a { color: #93c5fd; text-decoration: none; }
-.paper-title a:hover { text-decoration: underline; }
-.paper-meta { font-size: 13px; color: #94a3b8; margin-bottom: 4px; }
-.paper-cats { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
-.cat-tag {
-    font-size: 11px; padding: 3px 8px; border-radius: 4px;
-    background: #334155; color: #93c5fd;
-}
-.paper-abstract { font-size: 13px; color: #64748b; margin-top: 8px; line-height: 1.5; }
+.filter-group{margin-bottom:10px}
+.filter-group label{font-size:12px;color:#94a3b8;display:block;margin-bottom:4px;font-weight:500}
+.filter-group select,.filter-group input{width:100%;padding:7px 10px;border-radius:6px;border:1px solid #334155;background:#0b0f1a;color:#e2e8f0;font-size:13px;outline:none}
+.filter-group select:focus,.filter-group input:focus{border-color:#818cf8}
 
-.empty-state { text-align: center; padding: 60px 20px; color: #64748b; }
-.empty-state p { font-size: 16px; margin-bottom: 10px; }
+.cat-list{max-height:320px;overflow-y:auto;font-size:12px}
+.cat-list::-webkit-scrollbar{width:4px}
+.cat-list::-webkit-scrollbar-thumb{background:#334155;border-radius:2px}
+.cat-item{display:flex;justify-content:space-between;padding:5px 8px;border-radius:4px;cursor:pointer;transition:background 0.1s}
+.cat-item:hover,.cat-item.active{background:#1e293b}
+.cat-item .name{color:#cbd5e1;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cat-item .cnt{color:#818cf8;font-weight:600;margin-left:6px;flex-shrink:0}
 
-.footer { text-align: center; padding: 30px; color: #475569; font-size: 13px; }
+.digest-box{font-size:12px;color:#94a3b8;line-height:1.6;white-space:pre-line;max-height:200px;overflow-y:auto}
+
+/* Content */
+.content{display:flex;flex-direction:column;gap:12px}
+
+.search-bar{display:flex;gap:8px}
+.search-input{flex:1;padding:10px 14px;border-radius:8px;border:1px solid #334155;background:#131a2e;color:#e2e8f0;font-size:14px;outline:none}
+.search-input:focus{border-color:#818cf8}
+.btn-search{background:linear-gradient(135deg,#ec4899,#8b5cf6);padding:10px 20px;border-radius:8px;border:none;color:white;font-weight:600;cursor:pointer;font-size:14px}
+
+.toolbar{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+.toolbar .info{font-size:13px;color:#94a3b8}
+.sort-sel{padding:6px 10px;border-radius:6px;border:1px solid #334155;background:#131a2e;color:#e2e8f0;font-size:12px;outline:none}
+
+.paper-list{display:flex;flex-direction:column;gap:8px}
+.paper-card{background:#131a2e;border-radius:8px;padding:14px 16px;border:1px solid #1e293b;transition:border-color 0.15s}
+.paper-card:hover{border-color:#4f46e5}
+.paper-title{font-size:14px;font-weight:600;line-height:1.4;margin-bottom:5px}
+.paper-meta{font-size:12px;color:#64748b;margin-bottom:5px}
+.paper-meta .source-tag{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600;margin-left:6px}
+.src-pubmed{background:#164e63;color:#67e8f9}.src-biorxiv{background:#3f3f14;color:#fde047}.src-arxiv{background:#4a1942;color:#f0abfc}
+.src-semantic_scholar{background:#1e3a2f;color:#6ee7b7}.src-europepmc{background:#1e293b;color:#93c5fd}.src-crossref{background:#3b1e0f;color:#fdba74}
+.paper-cats{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:5px}
+.cat-tag{font-size:10px;padding:2px 7px;border-radius:3px;background:#1e293b;color:#a5b4fc;border:1px solid #334155}
+.paper-abstract{font-size:12px;color:#64748b;line-height:1.5;cursor:pointer}
+.paper-abstract.expanded{color:#94a3b8;max-height:none!important}
+.paper-links{margin-top:6px;font-size:12px;display:flex;gap:10px}
+.paper-links a{color:#818cf8}
+
+.pagination{display:flex;justify-content:center;gap:6px;margin-top:10px}
+.page-btn{padding:6px 12px;border-radius:6px;border:1px solid #334155;background:#131a2e;color:#e2e8f0;cursor:pointer;font-size:12px}
+.page-btn:hover,.page-btn.active{background:#4f46e5;border-color:#4f46e5}
+.page-btn:disabled{opacity:0.3;cursor:not-allowed}
+
+.empty-state{text-align:center;padding:50px 20px;color:#475569}
+.footer{text-align:center;padding:20px;color:#334155;font-size:12px;margin-top:10px}
 </style>
 </head>
 <body>
 
 <div class="header">
-    <h1>3D Genome & Deep Learning</h1>
-    <p>Literature Hub — Auto-updating Research Tracker</p>
+    <h1>3D Genome & Deep Learning Literature Hub</h1>
+    <p>Comprehensive Auto-updating Research Tracker | 6 Databases | 19 Categories</p>
 </div>
 
 <div class="container">
-
-    <!-- Status bar -->
     <div class="status-bar">
         <div class="status-dot" id="statusDot"></div>
         <span class="status-text" id="statusText">Ready</span>
     </div>
 
-    <!-- Action buttons -->
     <div class="actions">
-        <button class="btn btn-fetch" onclick="doAction('/api/fetch')" id="btnFetch">
-            <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.66 0 3-4.03 3-9s-1.34-9-3-9m0 18c-1.66 0-3-4.03-3-9s1.34-9 3-9"/></svg>
-            Fetch Papers
-        </button>
-        <button class="btn btn-readme" onclick="doAction('/api/update-readme')">
-            <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
-            Update README
-        </button>
-        <button class="btn btn-email" onclick="doAction('/api/send-email')">
-            <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
-            Send Email
-        </button>
-        <button class="btn btn-pipeline" onclick="doAction('/api/run-pipeline')" id="btnPipeline">
-            <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-            One-Click Pipeline
-        </button>
-        <button class="btn btn-export" onclick="exportCSV()">
-            <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-            Export CSV
-        </button>
+        <button class="btn btn-fetch" onclick="doAction('/api/fetch')">Fetch Papers (6 DBs)</button>
+        <button class="btn btn-pipeline" onclick="doAction('/api/run-pipeline')">One-Click Full Pipeline</button>
+        <button class="btn btn-readme" onclick="doAction('/api/update-readme')">Update README</button>
+        <button class="btn btn-email" onclick="doAction('/api/send-email')">Send Email Digest</button>
+        <button class="btn btn-export" onclick="location.href='/api/export-csv'">Export CSV</button>
     </div>
 
-    <!-- Search -->
-    <div class="search-box">
-        <input class="search-input" id="searchInput" type="text" placeholder="Search papers (e.g. Hi-C deep learning, TAD prediction, Akita...)" onkeydown="if(event.key==='Enter')doSearch()">
-        <button class="btn btn-search-go" onclick="doSearch()">Search</button>
-    </div>
+    <div class="main-grid">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="panel">
+                <h3>Statistics</h3>
+                <div class="stats-mini">
+                    <div class="stat-mini"><div class="num" id="sTotal">-</div><div class="lbl">Papers</div></div>
+                    <div class="stat-mini"><div class="num" id="sSources">-</div><div class="lbl">Sources</div></div>
+                    <div class="stat-mini"><div class="num" id="sCats">-</div><div class="lbl">Categories</div></div>
+                    <div class="stat-mini"><div class="num" id="sYears">-</div><div class="lbl">Year Span</div></div>
+                </div>
+            </div>
 
-    <!-- Stats -->
-    <div class="stats-grid" id="statsGrid">
-        <div class="stat-card"><div class="stat-number" id="statTotal">-</div><div class="stat-label">Total Papers</div></div>
-        <div class="stat-card"><div class="stat-number" id="statSources">-</div><div class="stat-label">Sources</div></div>
-        <div class="stat-card"><div class="stat-number" id="statCats">-</div><div class="stat-label">Categories</div></div>
-        <div class="stat-card"><div class="stat-number" id="statYears">-</div><div class="stat-label">Year Span</div></div>
-    </div>
+            <div class="panel">
+                <h3>Filters</h3>
+                <div class="filter-group">
+                    <label>Source</label>
+                    <select id="filterSource" onchange="applyFilters()"><option value="">All Sources</option></select>
+                </div>
+                <div class="filter-group">
+                    <label>Year Range</label>
+                    <div style="display:flex;gap:4px">
+                        <select id="filterYearFrom" onchange="applyFilters()"><option value="">From</option></select>
+                        <select id="filterYearTo" onchange="applyFilters()"><option value="">To</option></select>
+                    </div>
+                </div>
+                <div class="filter-group">
+                    <label>Sort By</label>
+                    <select id="sortBy" onchange="applyFilters()">
+                        <option value="date_desc">Newest First</option>
+                        <option value="date_asc">Oldest First</option>
+                        <option value="title_asc">Title A-Z</option>
+                        <option value="relevance" id="sortRelevance" style="display:none">Relevance</option>
+                    </select>
+                </div>
+            </div>
 
-    <!-- Papers -->
-    <div class="section">
-        <h2 id="papersTitle">Papers</h2>
-        <div class="paper-list" id="paperList">
-            <div class="empty-state">
-                <p>No papers yet.</p>
-                <p>Click <strong>"Fetch Papers"</strong> or <strong>"One-Click Pipeline"</strong> to get started!</p>
+            <div class="panel">
+                <h3>Categories</h3>
+                <div class="cat-list" id="catList"></div>
+            </div>
+
+            <div class="panel">
+                <h3>Latest Digest</h3>
+                <div class="digest-box" id="digestBox">Loading...</div>
             </div>
         </div>
+
+        <!-- Content -->
+        <div class="content">
+            <div class="search-bar">
+                <input class="search-input" id="searchInput" type="text" placeholder="Search papers by title, abstract, author, category..." onkeydown="if(event.key==='Enter')doSearch()">
+                <button class="btn-search" onclick="doSearch()">Search</button>
+            </div>
+
+            <div class="toolbar">
+                <span class="info" id="resultInfo">Loading papers...</span>
+            </div>
+
+            <div class="paper-list" id="paperList">
+                <div class="empty-state"><p>Loading...</p></div>
+            </div>
+
+            <div class="pagination" id="pagination"></div>
+        </div>
     </div>
-
 </div>
 
-<div class="footer">
-    3D Genome & Deep Learning Literature Hub &mdash; Auto-generated by
-    <a href="https://github.com/Yin-Shen/3DGenomeHub" style="color:#667eea;">3DGenomeHub</a>
-</div>
+<div class="footer">3D Genome & Deep Learning Literature Hub &mdash; <a href="https://github.com/Yin-Shen/3DGenomeHub">GitHub</a></div>
 
 <script>
-// Poll status
+let ALL_PAPERS = [];
+let FILTERED = [];
+let PAGE = 1;
+const PER_PAGE = 25;
 let polling = null;
+let activeCategory = "";
+let searchMode = false;
 
-function updateStatus(status, message) {
-    const dot = document.getElementById('statusDot');
-    const text = document.getElementById('statusText');
-    dot.className = 'status-dot ' + (status || 'idle');
-    text.textContent = message || 'Ready';
+function updateStatus(s, m) {
+    document.getElementById('statusDot').className = 'status-dot ' + (s||'idle');
+    document.getElementById('statusText').textContent = m || 'Ready';
 }
 
 function pollStatus() {
-    fetch('/api/status').then(r => r.json()).then(data => {
-        updateStatus(data.status, data.message);
-        if (data.status === 'done' || data.status === 'error') {
-            clearInterval(polling);
-            polling = null;
-            loadStats();
-            loadPapers();
-        }
-    }).catch(() => {});
+    fetch('/api/status').then(r=>r.json()).then(d=>{
+        updateStatus(d.status, d.message);
+        if(d.status==='done'||d.status==='error'){clearInterval(polling);polling=null;loadAll();}
+    }).catch(()=>{});
 }
 
-function doAction(endpoint) {
-    fetch(endpoint, {method: 'POST'}).then(r => r.json()).then(data => {
-        updateStatus('fetching', data.message);
-        if (!polling) polling = setInterval(pollStatus, 2000);
-    }).catch(e => updateStatus('error', 'Request failed: ' + e));
+function doAction(ep) {
+    fetch(ep,{method:'POST'}).then(r=>r.json()).then(d=>{
+        updateStatus('fetching', d.message);
+        if(!polling) polling = setInterval(pollStatus, 2000);
+    });
 }
 
 function doSearch() {
     const q = document.getElementById('searchInput').value.trim();
-    if (!q) { loadPapers(); return; }
-    fetch('/api/search', {method: 'POST', body: 'q=' + encodeURIComponent(q), headers: {'Content-Type': 'application/x-www-form-urlencoded'}})
-        .then(r => r.json())
-        .then(papers => {
-            document.getElementById('papersTitle').textContent = `Search results for "${q}" (${papers.length})`;
-            renderPapers(papers);
+    if(!q){searchMode=false;document.getElementById('sortRelevance').style.display='none';applyFilters();return;}
+    searchMode = true;
+    document.getElementById('sortRelevance').style.display='';
+    document.getElementById('sortBy').value='relevance';
+    fetch('/api/search',{method:'POST',body:'q='+encodeURIComponent(q),headers:{'Content-Type':'application/x-www-form-urlencoded'}})
+        .then(r=>r.json()).then(papers=>{
+            FILTERED = papers;
+            PAGE = 1;
+            renderResults(`Search: "${q}" (${papers.length} results)`);
         });
 }
 
-function exportCSV() {
-    window.location.href = '/api/export-csv';
+function applyFilters() {
+    if(searchMode && document.getElementById('sortBy').value==='relevance') { renderPaginated(); return; }
+    searchMode = false;
+    const src = document.getElementById('filterSource').value;
+    const yFrom = parseInt(document.getElementById('filterYearFrom').value) || 0;
+    const yTo = parseInt(document.getElementById('filterYearTo').value) || 9999;
+    const sort = document.getElementById('sortBy').value;
+
+    FILTERED = ALL_PAPERS.filter(p => {
+        if(src && p.source !== src) return false;
+        if(p.year < yFrom || p.year > yTo) return false;
+        if(activeCategory && !(p.categories||[]).includes(activeCategory)) return false;
+        return true;
+    });
+
+    if(sort==='date_desc') FILTERED.sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+    else if(sort==='date_asc') FILTERED.sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+    else if(sort==='title_asc') FILTERED.sort((a,b)=>(a.title||'').localeCompare(b.title||''));
+
+    PAGE = 1;
+    const label = activeCategory ? `${activeCategory} (${FILTERED.length})` : `All Papers (${FILTERED.length})`;
+    renderResults(label);
 }
 
-function loadStats() {
-    fetch('/api/stats').then(r => r.json()).then(data => {
-        document.getElementById('statTotal').textContent = data.total_papers || 0;
-        document.getElementById('statSources').textContent = Object.keys(data.by_source || {}).length;
-        document.getElementById('statCats').textContent = Object.keys(data.by_category || {}).length;
-        const years = Object.keys(data.by_year || {}).map(Number).sort();
-        if (years.length >= 2) {
-            document.getElementById('statYears').textContent = years[0] + '-' + years[years.length-1];
-        } else if (years.length === 1) {
-            document.getElementById('statYears').textContent = years[0];
-        }
-    });
+function renderResults(label) {
+    document.getElementById('resultInfo').textContent = label;
+    renderPaginated();
 }
 
-function loadPapers() {
-    fetch('/api/papers').then(r => r.json()).then(papers => {
-        document.getElementById('papersTitle').textContent = `Papers (${papers.length})`;
-        // Sort by date descending
-        papers.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-        renderPapers(papers.slice(0, 100));  // Show latest 100
-    });
+function renderPaginated() {
+    const total = FILTERED.length;
+    const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
+    if(PAGE > totalPages) PAGE = totalPages;
+    const start = (PAGE-1)*PER_PAGE;
+    const slice = FILTERED.slice(start, start+PER_PAGE);
+    renderPapers(slice);
+    renderPagination(totalPages);
 }
 
 function renderPapers(papers) {
     const list = document.getElementById('paperList');
-    if (!papers.length) {
-        list.innerHTML = '<div class="empty-state"><p>No papers found.</p><p>Click <strong>"Fetch Papers"</strong> to get started!</p></div>';
-        return;
-    }
+    if(!papers.length){list.innerHTML='<div class="empty-state"><p>No papers found. Click "Fetch Papers" to get started!</p></div>';return;}
     list.innerHTML = papers.map(p => {
-        const authors = (p.authors || []).length > 2
-            ? p.authors[0] + ' et al.'
-            : (p.authors || []).join(', ') || 'Unknown';
-        const cats = (p.categories || []).map(c => `<span class="cat-tag">${esc(c)}</span>`).join('');
-        const abstract = p.abstract ? `<div class="paper-abstract">${esc(p.abstract.substring(0, 250))}${p.abstract.length > 250 ? '...' : ''}</div>` : '';
+        const authors = (p.authors||[]).length>2 ? p.authors[0]+' et al.' : (p.authors||[]).join(', ')||'Unknown';
+        const cats = (p.categories||[]).map(c=>`<span class="cat-tag">${esc(c)}</span>`).join('');
+        const srcClass = 'src-'+(p.source||'').replace(/ /g,'_');
+        const abs = p.abstract||'';
+        const absShort = abs.length>300 ? abs.substring(0,300)+'...' : abs;
+        const links = [];
+        if(p.url) links.push(`<a href="${esc(p.url)}" target="_blank">Paper</a>`);
+        if(p.doi) links.push(`<a href="https://doi.org/${esc(p.doi)}" target="_blank">DOI</a>`);
+        if(p.doi) links.push(`<a href="https://scholar.google.com/scholar?q=${encodeURIComponent(p.title)}" target="_blank">Google Scholar</a>`);
         return `<div class="paper-card">
-            <div class="paper-title"><a href="${esc(p.url || '#')}" target="_blank">${esc(p.title)}</a></div>
-            <div class="paper-meta">${esc(authors)} &middot; ${esc(p.journal || '')} (${p.year || ''})</div>
+            <div class="paper-title"><a href="${esc(p.url||'#')}" target="_blank">${esc(p.title)}</a></div>
+            <div class="paper-meta">${esc(authors)} · ${esc(p.journal||'')} (${p.year||''}) <span class="source-tag ${srcClass}">${esc(p.source||'')}</span></div>
             <div class="paper-cats">${cats}</div>
-            ${abstract}
+            ${abs ? `<div class="paper-abstract" onclick="this.classList.toggle('expanded');this.textContent=this.classList.contains('expanded')?'${esc(abs).replace(/'/g,"\\'")}':'${esc(absShort).replace(/'/g,"\\'")}';" style="max-height:60px;overflow:hidden">${esc(absShort)}</div>` : ''}
+            <div class="paper-links">${links.join(' · ')}</div>
         </div>`;
     }).join('');
 }
 
-function esc(s) {
-    if (!s) return '';
-    const d = document.createElement('div');
-    d.textContent = s;
-    return d.innerHTML;
+function renderPagination(totalPages) {
+    const el = document.getElementById('pagination');
+    if(totalPages<=1){el.innerHTML='';return;}
+    let html = `<button class="page-btn" onclick="goPage(${PAGE-1})" ${PAGE<=1?'disabled':''}>Prev</button>`;
+    const range = 2;
+    for(let i=1;i<=totalPages;i++){
+        if(i===1||i===totalPages||Math.abs(i-PAGE)<=range){
+            html+=`<button class="page-btn${i===PAGE?' active':''}" onclick="goPage(${i})">${i}</button>`;
+        } else if(i===PAGE-range-1||i===PAGE+range+1){
+            html+=`<button class="page-btn" disabled>...</button>`;
+        }
+    }
+    html+=`<button class="page-btn" onclick="goPage(${PAGE+1})" ${PAGE>=totalPages?'disabled':''}>Next</button>`;
+    el.innerHTML=html;
+}
+function goPage(p){PAGE=p;renderPaginated();window.scrollTo({top:300,behavior:'smooth'});}
+
+function selectCategory(cat) {
+    activeCategory = (activeCategory===cat) ? "" : cat;
+    document.querySelectorAll('.cat-item').forEach(el=>{
+        el.classList.toggle('active', el.dataset.cat===activeCategory);
+    });
+    searchMode=false;
+    document.getElementById('searchInput').value='';
+    applyFilters();
 }
 
-// Init
-loadStats();
-loadPapers();
+function loadAll() {
+    fetch('/api/papers').then(r=>r.json()).then(papers=>{
+        ALL_PAPERS = papers;
+        FILTERED = [...papers];
+        FILTERED.sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+        loadStats();
+        loadDigest();
+        applyFilters();
+    });
+}
+
+function loadStats() {
+    fetch('/api/stats').then(r=>r.json()).then(s=>{
+        document.getElementById('sTotal').textContent = s.total_papers||0;
+        document.getElementById('sSources').textContent = Object.keys(s.by_source||{}).length;
+        document.getElementById('sCats').textContent = (s.categories||[]).length;
+        const years = (s.years||[]);
+        document.getElementById('sYears').textContent = years.length>=2 ? years[years.length-1]+'-'+years[0] : (years[0]||'-');
+
+        // Populate filters
+        const srcSel = document.getElementById('filterSource');
+        srcSel.innerHTML = '<option value="">All Sources</option>';
+        (s.sources||[]).forEach(src=>{srcSel.innerHTML+=`<option value="${src}">${src} (${(s.by_source||{})[src]||0})</option>`;});
+
+        const yFromSel = document.getElementById('filterYearFrom');
+        const yToSel = document.getElementById('filterYearTo');
+        yFromSel.innerHTML='<option value="">From</option>';
+        yToSel.innerHTML='<option value="">To</option>';
+        years.forEach(y=>{yFromSel.innerHTML+=`<option value="${y}">${y}</option>`;yToSel.innerHTML+=`<option value="${y}">${y}</option>`;});
+
+        // Category list
+        const catList = document.getElementById('catList');
+        const cc = s.category_counts||{};
+        catList.innerHTML = Object.entries(cc).map(([cat,cnt])=>
+            `<div class="cat-item" data-cat="${esc(cat)}" onclick="selectCategory('${esc(cat).replace(/'/g,"\\'")}')"><span class="name" title="${esc(cat)}">${esc(cat)}</span><span class="cnt">${cnt}</span></div>`
+        ).join('');
+    });
+}
+
+function loadDigest() {
+    fetch('/api/digest').then(r=>r.json()).then(d=>{
+        document.getElementById('digestBox').textContent = d.summary_text || 'No digest available.';
+    }).catch(()=>{});
+}
+
+function esc(s){if(!s)return'';const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+
+loadAll();
 </script>
 </body>
 </html>
