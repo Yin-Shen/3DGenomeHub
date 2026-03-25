@@ -77,6 +77,15 @@ class GUIHandler(BaseHTTPRequestHandler):
                 self._serve_json(digest)
             else:
                 self._serve_json({"summary_text": "No papers yet.", "statistics": {}})
+        elif path == "/api/analysis":
+            papers = load_papers()
+            if papers:
+                categorize_papers(papers)
+                from .analyzer import analyze_papers
+                analysis = analyze_papers(papers)
+                self._serve_json(analysis)
+            else:
+                self._serve_json({"research_summary": "No papers yet.", "dl_method_distribution": {}})
         elif path == "/api/export-csv":
             self._handle_export_csv()
         else:
@@ -363,6 +372,18 @@ a:hover{text-decoration:underline}
         <button class="btn btn-readme" onclick="doAction('/api/update-readme')">Update README</button>
         <button class="btn btn-email" onclick="doAction('/api/send-email')">Send Email Digest</button>
         <button class="btn btn-export" onclick="location.href='/api/export-csv'">Export CSV</button>
+        <button class="btn" style="background:#b91c1c" onclick="showAnalysis()">AI Analysis</button>
+    </div>
+
+    <!-- AI Analysis Modal -->
+    <div id="analysisModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:999;overflow-y:auto">
+      <div style="max-width:1000px;margin:30px auto;background:#131a2e;border-radius:12px;padding:24px;border:1px solid #334155;position:relative">
+        <button onclick="document.getElementById('analysisModal').style.display='none'" style="position:absolute;top:12px;right:16px;background:none;border:none;color:#94a3b8;font-size:24px;cursor:pointer">&times;</button>
+        <h2 style="font-size:20px;color:#f1f5f9;margin-bottom:16px">AI Research Analysis: 3D Genome × Deep Learning</h2>
+        <div id="analysisContent" style="color:#cbd5e1">
+          <p style="color:#94a3b8">Loading analysis...</p>
+        </div>
+      </div>
     </div>
 
     <div class="main-grid">
@@ -405,6 +426,16 @@ a:hover{text-decoration:underline}
             <div class="panel">
                 <h3>Categories</h3>
                 <div class="cat-list" id="catList"></div>
+            </div>
+
+            <div class="panel">
+                <h3>DL Methods</h3>
+                <div class="cat-list" id="dlMethodList" style="max-height:200px"><span style="color:#64748b;font-size:12px">Click "AI Analysis"</span></div>
+            </div>
+
+            <div class="panel">
+                <h3>Hot Topics</h3>
+                <div id="hotTopics" style="font-size:12px;color:#94a3b8;max-height:200px;overflow-y:auto"><span style="color:#64748b">Click "AI Analysis"</span></div>
             </div>
 
             <div class="panel">
@@ -609,6 +640,125 @@ function loadDigest() {
     fetch('/api/digest').then(r=>r.json()).then(d=>{
         document.getElementById('digestBox').textContent = d.summary_text || 'No digest available.';
     }).catch(()=>{});
+}
+
+function showAnalysis() {
+    const modal = document.getElementById('analysisModal');
+    modal.style.display = 'block';
+    document.getElementById('analysisContent').innerHTML = '<p style="color:#fbbf24">Analyzing papers... This may take a moment.</p>';
+    fetch('/api/analysis').then(r=>r.json()).then(a=>{
+        let html = '';
+
+        // Summary
+        html += `<div style="background:#0b0f1a;border-radius:8px;padding:16px;margin-bottom:16px;white-space:pre-line;font-size:13px;line-height:1.6;font-family:monospace;color:#a5b4fc">${esc(a.research_summary||'')}</div>`;
+
+        // DL stats
+        html += `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px">`;
+        html += `<div style="background:#1e1b4b;border-radius:8px;padding:14px;text-align:center"><div style="font-size:28px;font-weight:700;color:#818cf8">${a.dl_paper_count||0}</div><div style="font-size:12px;color:#94a3b8">DL Papers</div></div>`;
+        html += `<div style="background:#1e1b4b;border-radius:8px;padding:14px;text-align:center"><div style="font-size:28px;font-weight:700;color:#34d399">${a.dl_ratio||0}%</div><div style="font-size:12px;color:#94a3b8">DL Ratio</div></div>`;
+        html += `<div style="background:#1e1b4b;border-radius:8px;padding:14px;text-align:center"><div style="font-size:28px;font-weight:700;color:#fbbf24">${Object.keys(a.dl_method_distribution||{}).length}</div><div style="font-size:12px;color:#94a3b8">DL Methods</div></div>`;
+        html += `</div>`;
+
+        // DL Method distribution bar chart
+        const methods = a.dl_method_distribution || {};
+        if(Object.keys(methods).length) {
+            html += `<h3 style="font-size:15px;margin-bottom:10px;color:#f1f5f9">Deep Learning Architecture Distribution</h3>`;
+            const maxVal = Math.max(...Object.values(methods));
+            html += `<div style="margin-bottom:16px">`;
+            for(const [m, c] of Object.entries(methods)) {
+                const pct = Math.round(c/maxVal*100);
+                html += `<div style="display:flex;align-items:center;margin-bottom:4px;font-size:12px">
+                    <span style="width:160px;color:#cbd5e1;flex-shrink:0">${esc(m)}</span>
+                    <div style="flex:1;background:#1e293b;border-radius:3px;height:18px;margin:0 8px">
+                        <div style="width:${pct}%;background:linear-gradient(90deg,#818cf8,#6366f1);height:100%;border-radius:3px;min-width:2px"></div>
+                    </div>
+                    <span style="color:#818cf8;width:30px;text-align:right">${c}</span>
+                </div>`;
+            }
+            html += `</div>`;
+        }
+
+        // Tool mentions
+        const tools = a.tool_mentions || {};
+        if(Object.keys(tools).length) {
+            html += `<h3 style="font-size:15px;margin-bottom:10px;color:#f1f5f9">Most Referenced Tools & Models</h3>`;
+            html += `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px">`;
+            for(const [t, c] of Object.entries(tools)) {
+                const size = Math.min(Math.max(12, 10+c*2), 24);
+                html += `<span style="background:#1e293b;border:1px solid #334155;border-radius:6px;padding:4px 10px;font-size:${size}px;color:#93c5fd">${esc(t)} <sup style="color:#818cf8">${c}</sup></span>`;
+            }
+            html += `</div>`;
+        }
+
+        // Hot topics
+        const hot = a.hot_topics || [];
+        if(hot.length) {
+            html += `<h3 style="font-size:15px;margin-bottom:10px;color:#f1f5f9">Hot Research Directions (Recent)</h3>`;
+            html += `<div style="margin-bottom:16px">`;
+            hot.forEach((h,i) => {
+                html += `<div style="display:flex;align-items:center;padding:6px 10px;background:${i%2?'transparent':'#0b0f1a'};border-radius:4px;font-size:13px">
+                    <span style="color:#fbbf24;margin-right:8px">🔥</span>
+                    <span style="color:#e2e8f0;flex:1">${esc(h.topic)}</span>
+                    <span style="color:#818cf8;font-weight:600">${h.count}</span>
+                </div>`;
+            });
+            html += `</div>`;
+        }
+
+        // Category insights
+        const insights = a.category_insights || {};
+        if(Object.keys(insights).length) {
+            html += `<h3 style="font-size:15px;margin-bottom:10px;color:#f1f5f9">Category Insights</h3>`;
+            html += `<table style="width:100%;font-size:12px;border-collapse:collapse;margin-bottom:16px">`;
+            html += `<tr style="border-bottom:1px solid #334155"><th style="text-align:left;padding:6px;color:#94a3b8">Category</th><th style="text-align:left;padding:6px;color:#94a3b8">Status</th></tr>`;
+            for(const [cat, info] of Object.entries(insights)) {
+                const color = info.includes('rapidly') ? '#34d399' : info.includes('actively') ? '#fbbf24' : '#94a3b8';
+                html += `<tr style="border-bottom:1px solid #1e293b"><td style="padding:6px;color:#cbd5e1">${esc(cat)}</td><td style="padding:6px;color:${color}">${esc(info)}</td></tr>`;
+            }
+            html += `</table>`;
+        }
+
+        // Trend analysis
+        const trend = a.trend_analysis || {};
+        const trendYears = Object.keys(trend).sort().reverse().slice(0, 5);
+        if(trendYears.length) {
+            html += `<h3 style="font-size:15px;margin-bottom:10px;color:#f1f5f9">Year-by-Year Trend</h3>`;
+            html += `<table style="width:100%;font-size:12px;border-collapse:collapse">`;
+            html += `<tr style="border-bottom:1px solid #334155"><th style="padding:6px;color:#94a3b8">Year</th><th style="padding:6px;color:#94a3b8">Papers</th><th style="padding:6px;color:#94a3b8;text-align:left">Top Methods</th></tr>`;
+            trendYears.forEach(y => {
+                const t = trend[y];
+                const methods = Object.entries(t.top_methods||{}).map(([m,c])=>`${m}(${c})`).join(', ');
+                html += `<tr style="border-bottom:1px solid #1e293b"><td style="padding:6px;color:#818cf8;text-align:center">${y}</td><td style="padding:6px;color:#e2e8f0;text-align:center">${t.total}</td><td style="padding:6px;color:#94a3b8">${methods}</td></tr>`;
+            });
+            html += `</table>`;
+        }
+
+        document.getElementById('analysisContent').innerHTML = html;
+
+        // Also update sidebar
+        updateSidebarAnalysis(a);
+    }).catch(e=>{
+        document.getElementById('analysisContent').innerHTML = `<p style="color:#f87171">Analysis failed: ${e}</p>`;
+    });
+}
+
+function updateSidebarAnalysis(a) {
+    // DL Methods sidebar
+    const methods = a.dl_method_distribution || {};
+    const mlEl = document.getElementById('dlMethodList');
+    if(Object.keys(methods).length) {
+        mlEl.innerHTML = Object.entries(methods).map(([m,c])=>
+            `<div class="cat-item"><span class="name">${esc(m)}</span><span class="cnt">${c}</span></div>`
+        ).join('');
+    }
+    // Hot topics sidebar
+    const hot = a.hot_topics || [];
+    const htEl = document.getElementById('hotTopics');
+    if(hot.length) {
+        htEl.innerHTML = hot.map(h=>
+            `<div style="padding:3px 0;border-bottom:1px solid #1e293b"><span style="color:#fbbf24;margin-right:4px">•</span>${esc(h.topic)} <span style="color:#818cf8">(${h.count})</span></div>`
+        ).join('');
+    }
 }
 
 function esc(s){if(!s)return'';const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
