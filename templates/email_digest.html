@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3D Genome & Deep Learning — Literature Update</title>
+</head>
+<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;background:#f5f5f5;color:#333;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f5f5;padding:20px 0;">
+    <tr>
+      <td align="center">
+        <table width="650" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+
+          <!-- Header -->
+          <tr>
+            <td style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);padding:35px 30px;text-align:center;">
+              <h1 style="color:#ffffff;margin:0;font-size:26px;font-weight:700;">
+                3D Genome & Deep Learning
+              </h1>
+              <p style="color:rgba(255,255,255,0.85);margin:10px 0 0;font-size:15px;">
+                Literature Update — {{ digest.generated_at[:10] }}
+              </p>
+            </td>
+          </tr>
+
+          <!-- Summary -->
+          <tr>
+            <td style="padding:25px 30px;">
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td width="50%" style="background:#f0f4ff;border-radius:8px;padding:15px;text-align:center;">
+                    <div style="font-size:32px;font-weight:700;color:#4f46e5;">{{ stats.total_papers }}</div>
+                    <div style="font-size:13px;color:#666;margin-top:4px;">Total Papers</div>
+                  </td>
+                  <td width="10"></td>
+                  <td width="50%" style="background:#f0fdf4;border-radius:8px;padding:15px;text-align:center;">
+                    <div style="font-size:32px;font-weight:700;color:#16a34a;">{{ new_stats.total_papers }}</div>
+                    <div style="font-size:13px;color:#666;margin-top:4px;">New This Update</div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- New papers by category -->
+          {% if new_by_category %}
+          <tr>
+            <td style="padding:0 30px 15px;">
+              <h2 style="font-size:18px;color:#1e293b;margin:0 0 12px;">New Papers by Category</h2>
+              {% for cat, papers in new_by_category.items() %}
+              <div style="margin-bottom:15px;">
+                <h3 style="font-size:15px;color:#4f46e5;margin:0 0 8px;border-bottom:1px solid #e2e8f0;padding-bottom:6px;">
+                  {{ cat }} ({{ papers|length }})
+                </h3>
+                {% for paper in papers %}
+                <div style="margin-bottom:12px;padding-left:10px;border-left:3px solid #e2e8f0;">
+                  <a href="{{ paper.url }}" style="color:#1a73e8;text-decoration:none;font-weight:600;font-size:14px;line-height:1.4;">
+                    {{ paper.title }}
+                  </a>
+                  <div style="font-size:12px;color:#666;margin-top:3px;">
+                    {% if paper.authors %}
+                      {{ paper.authors[0] }}{% if paper.authors|length > 1 %} et al.{% endif %}
+                      &middot;
+                    {% endif %}
+                    {{ paper.journal }} ({{ paper.year }})
+                  </div>
+                  {% if paper.abstract %}
+                  <div style="font-size:12px;color:#888;margin-top:4px;line-height:1.4;">
+                    {{ paper.abstract[:200] }}{% if paper.abstract|length > 200 %}...{% endif %}
+                  </div>
+                  {% endif %}
+                </div>
+                {% endfor %}
+              </div>
+              {% endfor %}
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td style="padding:0 30px 15px;">
+              <p style="color:#666;font-style:italic;">No new papers in this update.</p>
+            </td>
+          </tr>
+          {% endif %}
+
+          <!-- View on GitHub -->
+          <tr>
+            <td style="padding:15px 30px 25px;text-align:center;">
+              <a href="https://github.com/Yin-Shen/3DGenomeHub"
+                 style="display:inline-block;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;padding:12px 30px;border-radius:6px;text-decoration:none;font-weight:600;font-size:14px;">
+                View Full Collection on GitHub
+              </a>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="background:#f8fafc;padding:20px 30px;text-align:center;border-top:1px solid #e2e8f0;">
+              <p style="margin:0;font-size:12px;color:#94a3b8;">
+                This email was sent by
+                <a href="https://github.com/Yin-Shen/3DGenomeHub" style="color:#667eea;">3DGenomeHub</a>
+                — an auto-updating 3D genome & deep learning literature tracker.
+              </p>
+              <p style="margin:8px 0 0;font-size:11px;color:#cbd5e1;">
+                To unsubscribe, remove your email from the EMAIL_RECIPIENTS configuration.
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

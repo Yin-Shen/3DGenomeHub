@@ -1,0 +1,55 @@
+name: Update Literature Database
+
+on:
+  schedule:
+    # Run every Monday at 08:00 UTC
+    - cron: '0 8 * * 1'
+  workflow_dispatch:  # Allow manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run literature update pipeline
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_RECIPIENTS: ${{ secrets.EMAIL_RECIPIENTS }}
+        run: |
+          cd src && python -m genome_literature.cli run-pipeline --verbose
+
+      - name: Check for changes
+        id: changes
+        run: |
+          git diff --quiet README.md papers/ || echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and push updates
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md papers/papers.json
+          PAPER_COUNT=$(python -c "import json; print(len(json.load(open('papers/papers.json'))))" 2>/dev/null || echo "?")
+          git commit -m "Auto-update: refresh literature database (${PAPER_COUNT} papers)
+
+          Automated update via GitHub Actions.
+          Sources: PubMed, bioRxiv, arXiv"
+          git push
