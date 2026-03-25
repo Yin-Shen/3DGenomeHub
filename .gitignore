@@ -1,7 +1,14 @@
 __pycache__/
 *.pyc
+*.pyo
 .venv/
+venv/
 .env
+*.egg-info/
+dist/
+build/
 .DS_Store
 *.db
-data/artifacts/*.pkl
+papers/papers.json
+papers/new_papers.json
+logs/
