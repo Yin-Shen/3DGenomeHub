@@ -1,27 +1,49 @@
-# 架构设计概览
+# 架构设计 (v3)
 
-3DGenomeHub 采用模块化架构，将内容治理、数据存储、检索服务与 AI 能力解耦，便于后续扩展。
-
-## 核心组件
-
-| 模块 | 说明 | 关键技术 |
-| --- | --- | --- |
-| 数据模板 (YAML) | 统一三维基因组知识条目的结构 | YAML, Pydantic |
-| 数据导入 (Ingestion) | 校验、清洗并写入 SQLite/Parquet | Typer CLI, Pandas |
-| 索引构建 | 生成 TF-IDF 向量索引，支持语义检索 | scikit-learn |
-| API 服务 | 暴露 RESTful 检索接口和可视化文档 | FastAPI |
-| AI 扩展 | 预留 LLM 推理接口、向量数据库适配层 | LangChain (可选), Qdrant/Milvus |
+3DGenomeHub 是一个自动更新、经过相关性过滤的 3D 基因组 × 深度学习文献库。
+所有代码位于 `src/genome_literature/`，数据保存在 `papers/`，生成的文档位于 `README.md` 与 `docs/papers/`。
 
 ## 数据流
 
-1. **采集**：从 `data/sample-data.yml` 或外部数据源生成标准化 YAML/JSON。
-2. **导入**：执行 `three-d-genome-hub ingest` 将数据写入 `data/knowledge_base.db`。
-3. **索引**：运行 `three-d-genome-hub build-index` 生成 `data/artifacts/vector_index.pkl`。
-4. **服务**：启动 `uvicorn`，API 自动加载数据库与索引，完成问答/检索。
+```
+SEARCH_TOPICS (config.py)
+   │  按数据库语法生成检索式 (PubMed [tiab] / Europe PMC TITLE+ABSTRACT / arXiv ti+abs / 自由文本)
+   ▼
+fetcher.py ── PubMed · Europe PMC(含 bioRxiv/medRxiv 预印本) · bioRxiv 近期全量扫描 · arXiv · Semantic Scholar · CrossRef
+   │  net.py：按主机限速、429/5xx 重试退避；单个数据源失败只记录，不中断
+   ▼
+records.py ── 统一字段、清洗 HTML/JATS、DOI/PMID/arXiv/标题跨库去重，预印本与正式发表版本合并
+   ▼
+relevance.py ── 3D 基因组证据打分（必须命中核心术语）+ 负面词惩罚 + AI/ML 打分 → track / relevance / dl_methods / tools
+   ▼
+categorizer.py ── 19 个主题，带权重、词边界、标题加倍；每篇最多 3 个主题
+   ▼
+storage.py ── papers/papers.json（数据库）· papers/state.json（各数据源上次成功日期、上次新增 ID）
+   ▼
+readme_generator.py (README.md + docs/papers/*.md) · summarizer.py + email_notifier.py (邮件摘要) · web_app.py (本地 GUI) · cli.py
+```
 
-## 扩展建议
+## 关键设计
 
-- 引入 `celery + redis` 处理大规模爬虫与数据清洗。
-- 替换 TF-IDF 为 `sentence-transformers` 或自研模型，构建高质量语义检索。
-- 构建知识图谱：利用 NetworkX/Neo4j 建立实体关系（基因、组织、实验技术）。
-- 打通教学系统：通过 LTI 或 REST API 与 LMS（如 Moodle）集成。
+| 问题 | 做法 |
+| --- | --- |
+| 检索结果大量无关 | 每条候选记录都要经过 `relevance.is_relevant`：至少一个核心 3D 基因组术语（Hi-C、TAD、chromatin loop…），加权得分 ≥ `MIN_GENOME_SCORE`；Hi-C 基因组组装 scaffolding、蛋白质 contact map、转录激活结构域 (TAD)、HIC 色谱等同形词会被扣分 |
+| 关键词子串误匹配（gan⊂organization, tad⊂metadata） | `matching.py`：整词匹配；全大写缩写区分大小写；连字符/空格/复数自动兼容；`re:` 前缀写正则 |
+| 同一论文多次出现 | DOI、PMID、arXiv ID、标准化标题任一相同即合并；保留最早的 `id` 与 `first_seen`，合并摘要/引用数/来源 |
+| bioRxiv 没有检索 API | Europe PMC 的预印本索引 (`SRC:PPR`) 做主题检索 + bioRxiv details API 对近期窗口全量扫描并预过滤 |
+| 每次都“全部是新论文” | 数据库提交到仓库；增量模式按各数据源上次成功日期回溯 `INCREMENTAL_OVERLAP_DAYS` 天 |
+| 经典论文缺失 | 首次运行（或 `--backfill`）按相关性排序检索全部年份；`papers/curated_dois.txt` 保证里程碑论文被收录 |
+| 规则调整后旧数据不一致 | 每次运行都会对全库重新打分、分类，不再满足条件的记录被移除；也可 `python -m genome_literature rebuild` |
+
+## 调整方法
+
+- **扩大/缩小检索范围**：编辑 `config.SEARCH_TOPICS`（组内 OR、组间 AND）。
+- **收紧/放宽收录标准**：调整 `MIN_GENOME_SCORE`、`GENOME_CORE_TERMS`、`GENOME_CONTEXT_TERMS`、`NEGATIVE_TERMS`。
+- **修改主题**：编辑 `config.CATEGORIES` 中各主题的 `terms` 权重；`title_only` 表示只看标题。
+- 修改后运行 `rebuild` 重新打分并重新生成 README，再运行 `python -m pytest` 确认测试通过。
+
+## 自动化
+
+- `.github/workflows/update.yml`：每周一运行增量更新，提交 `papers/`、`README.md`、`docs/papers/`；手动触发时可勾选 backfill。
+- `.github/workflows/ci.yml`：在 Python 3.9 与 3.12 上运行测试。
+- 可选 Secrets：`NCBI_API_KEY`、`NCBI_EMAIL`、`SEMANTIC_SCHOLAR_API_KEY`、`SMTP_*`、`EMAIL_FROM`、`EMAIL_RECIPIENTS`。

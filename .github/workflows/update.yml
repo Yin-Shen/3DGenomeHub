@@ -2,16 +2,25 @@ name: Update Literature Database
 
 on:
   schedule:
-    # Run every Monday at 08:00 UTC
     - cron: '0 8 * * 1'
-  workflow_dispatch:  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      backfill:
+        description: 'Relevance-ranked search across all years instead of an incremental update'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
+concurrency:
+  group: literature-update
+  cancel-in-progress: false
+
 jobs:
   update:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
 
     steps:
       - name: Checkout repository
@@ -21,35 +30,40 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: pip
 
       - name: Install dependencies
         run: pip install -r requirements.txt
 
       - name: Run literature update pipeline
         env:
+          PYTHONPATH: src
+          NCBI_API_KEY: ${{ secrets.NCBI_API_KEY }}
+          NCBI_EMAIL: ${{ secrets.NCBI_EMAIL }}
+          SEMANTIC_SCHOLAR_API_KEY: ${{ secrets.SEMANTIC_SCHOLAR_API_KEY }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
           EMAIL_RECIPIENTS: ${{ secrets.EMAIL_RECIPIENTS }}
+          BACKFILL: ${{ github.event.inputs.backfill }}
         run: |
-          cd src && python -m genome_literature.cli run-pipeline --verbose
-
-      - name: Check for changes
-        id: changes
-        run: |
-          git diff --quiet README.md papers/ || echo "changed=true" >> "$GITHUB_OUTPUT"
+          if [ "$BACKFILL" = "true" ]; then
+            python -m genome_literature run-pipeline --backfill
+          else
+            python -m genome_literature run-pipeline
+          fi
 
       - name: Commit and push updates
-        if: steps.changes.outputs.changed == 'true'
         run: |
+          git add README.md papers/ docs/
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add README.md papers/papers.json
-          PAPER_COUNT=$(python -c "import json; print(len(json.load(open('papers/papers.json'))))" 2>/dev/null || echo "?")
-          git commit -m "Auto-update: refresh literature database (${PAPER_COUNT} papers)
-
-          Automated update via GitHub Actions.
-          Sources: PubMed, bioRxiv, arXiv"
+          PAPER_COUNT=$(python -c "import json; print(len(json.load(open('papers/papers.json'))))")
+          git commit -m "Auto-update: literature database (${PAPER_COUNT} papers)"
           git push

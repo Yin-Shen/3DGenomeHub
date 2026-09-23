@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/" xmlns:arxiv="http://arxiv.org/schemas/atom">
+  <title type="html">ArXiv Query: search_query=test</title>
+  <opensearch:totalResults>2</opensearch:totalResults>
+  <entry>
+    <id>http://arxiv.org/abs/2406.01234v2</id>
+    <updated>2024-07-01T00:00:00Z</updated>
+    <published>2024-06-03T17:00:00Z</published>
+    <title>HiCDiffusion: Diffusion Models for
+      Generating Chromatin Contact Maps</title>
+    <summary>  We introduce a denoising diffusion model that generates Hi-C contact maps
+      conditioned on DNA sequence, capturing TADs and chromatin loops.</summary>
+    <author><name>Ana Silva</name></author>
+    <author><name>Tom Becker</name></author>
+    <link href="http://arxiv.org/abs/2406.01234v2" rel="alternate" type="text/html"/>
+    <link title="pdf" href="http://arxiv.org/pdf/2406.01234v2" rel="related" type="application/pdf"/>
+    <arxiv:primary_category term="q-bio.GN" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="q-bio.GN" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.LG" scheme="http://arxiv.org/schemas/atom"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2301.04567v1</id>
+    <published>2023-01-11T10:00:00Z</published>
+    <title>Deep learning for protein contact map prediction</title>
+    <summary>We predict residue contact maps for protein structure prediction with a residual network.</summary>
+    <author><name>Kai Wong</name></author>
+    <arxiv:doi>10.1093/bioinformatics/btad001</arxiv:doi>
+    <arxiv:journal_ref>Bioinformatics 39 (2023)</arxiv:journal_ref>
+    <link title="pdf" href="http://arxiv.org/pdf/2301.04567v1" rel="related" type="application/pdf"/>
+  </entry>
+</feed>

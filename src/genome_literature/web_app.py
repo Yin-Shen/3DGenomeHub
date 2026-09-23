@@ -1,7 +1,10 @@
-"""Web-based GUI for 3D Genome & Deep Learning Literature Hub.
+"""Local web GUI for the 3D Genome & Deep Learning Literature Hub.
 
-Launch with: python run.py
-Then open http://localhost:8686 in your browser.
+Launch with ``python run.py`` (or ``python -m genome_literature serve``) and
+open http://localhost:8686.  The server binds to 127.0.0.1 by default
+(override with GENOME_HUB_HOST) and state-changing requests must carry the
+``X-Requested-With: 3DGenomeHub`` header, so other websites cannot trigger
+fetches or emails.
 """
 
 from __future__ import annotations
@@ -11,759 +14,642 @@ import logging
 import sys
 import threading
 import webbrowser
-from datetime import datetime
-from pathlib import Path
-from typing import Any
+from collections import deque
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any, Callable
+from urllib.parse import parse_qs, urlparse
 
-from . import config
-from .categorizer import categorize_papers, get_statistics, group_by_category
+from . import __version__, config
+from .analyzer import analyze_papers
+from .categorizer import get_statistics
 from .email_notifier import send_digest_email
-from .fetcher import fetch_all_papers
-from .readme_generator import generate_readme
-from .storage import load_papers, merge_papers, save_papers
+from .pipeline import last_new_papers, run_pipeline
+from .readme_generator import write_outputs
+from .search import search_papers, to_bibtex, to_csv
+from .storage import load_papers, load_state
 from .summarizer import generate_digest
 
 logger = logging.getLogger(__name__)
 
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import parse_qs, urlparse
+_job_lock = threading.Lock()
+_status: dict[str, Any] = {"status": "idle", "message": "Ready", "job": None, "log": deque(maxlen=200)}
+_cache: dict[str, Any] = {"mtime": None, "papers": []}
+_cache_lock = threading.Lock()
 
-_app_state: dict[str, Any] = {
-    "status": "idle",
-    "message": "",
-    "papers": [],
-    "last_result": None,
-}
+
+def get_papers() -> list[dict[str, Any]]:
+    """Papers from disk, re-read only when papers.json changes."""
+    path = config.PAPERS_JSON
+    mtime = path.stat().st_mtime if path.exists() else None
+    with _cache_lock:
+        if mtime != _cache["mtime"]:
+            _cache["papers"] = load_papers() if mtime else []
+            _cache["mtime"] = mtime
+        return _cache["papers"]
+
+
+def _progress(msg: str) -> None:
+    _status["message"] = msg
+    _status["log"].append(msg)
+
+
+def start_job(name: str, fn: Callable[[], str]) -> bool:
+    """Run ``fn`` in a background thread unless another job is running."""
+    if not _job_lock.acquire(blocking=False):
+        return False
+    _status.update(status="running", job=name, message=f"{name} started…")
+    _status["log"].clear()
+
+    def runner() -> None:
+        try:
+            _status.update(status="done", message=fn())
+        except Exception as exc:
+            logger.exception("%s failed", name)
+            _status.update(status="error", message=f"{name} failed: {exc}")
+        finally:
+            _status["job"] = None
+            _job_lock.release()
+
+    threading.Thread(target=runner, daemon=True).start()
+    return True
+
+
+def _pipeline_job(**kwargs: Any) -> Callable[[], str]:
+    def job() -> str:
+        r = run_pipeline(progress=_progress, **kwargs)
+        errors = len(r.get("fetch_errors") or [])
+        msg = (f"Done: {r.get('new_count', 0)} new papers ({r.get('relevant_count', 0)} relevant of "
+               f"{r.get('fetched_count', 0)} candidates). Total: {r.get('total_count', 0)}.")
+        if errors:
+            msg += f" {errors} queries failed (network/API) — see log."
+            for e in r["fetch_errors"][:10]:
+                _status["log"].append(f"ERROR {e['source']}: {e['error'][:160]}")
+        return msg
+    return job
 
 
 class GUIHandler(BaseHTTPRequestHandler):
-    def log_message(self, format, *args):
-        pass
+    server_version = f"3DGenomeHub/{__version__}"
 
-    def do_GET(self):
+    def log_message(self, format: str, *args: Any) -> None:
+        logger.debug("%s - %s", self.address_string(), format % args)
+
+    # -- routing -----------------------------------------------------------
+    def do_GET(self) -> None:
         parsed = urlparse(self.path)
-        path = parsed.path
-        if path == "/" or path == "":
-            self._serve_home()
-        elif path == "/api/status":
-            self._serve_json(_app_state)
-        elif path == "/api/papers":
-            self._serve_json(load_papers())
-        elif path == "/api/stats":
-            papers = load_papers()
-            if papers:
-                categorize_papers(papers)
-                stats = get_statistics(papers)
-                grouped = group_by_category(papers)
-                cat_counts = {k: len(v) for k, v in grouped.items()}
-                stats["category_counts"] = cat_counts
-                # year list
-                stats["years"] = sorted(stats.get("by_year", {}).keys(), reverse=True)
-                # source list
-                stats["sources"] = sorted(stats.get("by_source", {}).keys())
-                # category list
-                stats["categories"] = list(cat_counts.keys())
-                self._serve_json(stats)
-            else:
-                self._serve_json({"total_papers": 0, "categories": [], "years": [], "sources": []})
-        elif path == "/api/digest":
-            papers = load_papers()
-            new_papers = load_papers(config.NEW_PAPERS_JSON)
-            if papers:
-                categorize_papers(papers)
-                if new_papers:
-                    categorize_papers(new_papers)
-                digest = generate_digest(new_papers or [], papers)
-                self._serve_json(digest)
-            else:
-                self._serve_json({"summary_text": "No papers yet.", "statistics": {}})
-        elif path == "/api/analysis":
-            papers = load_papers()
-            if papers:
-                categorize_papers(papers)
-                from .analyzer import analyze_papers
-                analysis = analyze_papers(papers)
-                self._serve_json(analysis)
-            else:
-                self._serve_json({"research_summary": "No papers yet.", "dl_method_distribution": {}})
-        elif path == "/api/export-csv":
-            self._handle_export_csv()
+        qs = parse_qs(parsed.query)
+        routes = {
+            "/": self._home,
+            "/api/status": self._api_status,
+            "/api/papers": lambda: self._json(get_papers()),
+            "/api/stats": self._api_stats,
+            "/api/digest": self._api_digest,
+            "/api/analysis": lambda: self._json(analyze_papers(get_papers())),
+            "/api/search": lambda: self._json(search_papers(get_papers(), qs.get("q", [""])[0], limit=200)),
+            "/api/export": lambda: self._export(qs.get("format", ["csv"])[0]),
+            "/api/export-csv": lambda: self._export("csv"),
+        }
+        handler = routes.get(parsed.path)
+        if handler:
+            handler()
         else:
-            self._serve_404()
+            self._error(404, "Not found")
 
-    def do_POST(self):
+    def do_POST(self) -> None:
         parsed = urlparse(self.path)
-        path = parsed.path
-        content_length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(content_length).decode("utf-8") if content_length else ""
-
-        if path == "/api/fetch":
-            self._handle_fetch()
-        elif path == "/api/update-readme":
-            self._handle_update_readme()
-        elif path == "/api/send-email":
-            self._handle_send_email()
-        elif path == "/api/run-pipeline":
-            self._handle_run_pipeline()
-        elif path == "/api/search":
-            params = parse_qs(body) if body else parse_qs(urlparse(self.path).query)
-            query = params.get("q", [""])[0]
-            self._handle_search(query)
+        length = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(length).decode("utf-8") if length else ""
+        if self.headers.get("X-Requested-With") != "3DGenomeHub":
+            self._error(403, "Missing X-Requested-With header")
+            return
+        if parsed.path == "/api/search":
+            query = parse_qs(body).get("q", [""])[0]
+            self._json(search_papers(get_papers(), query, limit=200))
+            return
+        actions: dict[str, tuple[str, Callable[[], str]]] = {
+            "/api/fetch": ("Update", _pipeline_job(skip_email=True)),
+            "/api/run-pipeline": ("Full pipeline", _pipeline_job()),
+            "/api/backfill": ("Backfill", _pipeline_job(backfill=True, skip_email=True)),
+            "/api/update-readme": ("README update", self._job_readme),
+            "/api/send-email": ("Email digest", self._job_email),
+        }
+        if parsed.path not in actions:
+            self._error(404, "Not found")
+            return
+        name, fn = actions[parsed.path]
+        if start_job(name, fn):
+            self._json({"ok": True, "message": f"{name} started…"})
         else:
-            self._serve_404()
+            self._json({"ok": False, "message": f"Busy: {_status.get('job')} is still running"})
 
-    def _handle_fetch(self):
-        if _app_state["status"] == "fetching":
-            self._serve_json({"ok": False, "message": "Already fetching..."})
-            return
-        def do_fetch():
-            _app_state["status"] = "fetching"
-            _app_state["message"] = "Fetching from PubMed, bioRxiv, arXiv, Semantic Scholar, Europe PMC, CrossRef..."
-            try:
-                papers = fetch_all_papers()
-                categorize_papers(papers)
-                existing = load_papers()
-                all_papers, new_papers = merge_papers(existing, papers)
-                categorize_papers(all_papers)
-                save_papers(all_papers)
-                if new_papers:
-                    save_papers(new_papers, config.NEW_PAPERS_JSON)
-                _app_state["status"] = "done"
-                _app_state["message"] = f"Done! Fetched {len(papers)} papers, {len(new_papers)} new. Total: {len(all_papers)}"
-            except Exception as e:
-                _app_state["status"] = "error"
-                _app_state["message"] = f"Error: {e}"
-        threading.Thread(target=do_fetch, daemon=True).start()
-        self._serve_json({"ok": True, "message": "Fetching started..."})
+    # -- jobs --------------------------------------------------------------
+    @staticmethod
+    def _job_readme() -> str:
+        papers = get_papers()
+        written = write_outputs(papers, last_new_papers(papers))
+        return f"README.md and {len(written) - 1} topic pages updated ({len(papers)} papers)."
 
-    def _handle_update_readme(self):
-        papers = load_papers()
-        if not papers:
-            self._serve_json({"ok": False, "message": "No papers in database."})
-            return
-        categorize_papers(papers)
-        content = generate_readme(papers)
-        config.README_PATH.write_text(content, encoding="utf-8")
-        self._serve_json({"ok": True, "message": f"README.md updated with {len(papers)} papers!"})
+    @staticmethod
+    def _job_email() -> str:
+        papers = get_papers()
+        new = last_new_papers(papers)
+        if not new:
+            return "No new papers from the last update — nothing to send."
+        ok = send_digest_email(new, generate_digest(new, papers))
+        return "Email digest sent." if ok else "Email not sent — check SMTP settings in .env."
 
-    def _handle_send_email(self):
-        all_papers = load_papers()
-        new_papers = load_papers(config.NEW_PAPERS_JSON)
-        if not new_papers:
-            self._serve_json({"ok": False, "message": "No new papers to report."})
-            return
-        categorize_papers(all_papers)
-        categorize_papers(new_papers)
-        digest = generate_digest(new_papers, all_papers)
-        sent = send_digest_email(new_papers, digest)
-        if sent:
-            self._serve_json({"ok": True, "message": "Email sent successfully!"})
+    # -- endpoints -----------------------------------------------------------
+    def _api_status(self) -> None:
+        self._json({k: (list(v) if isinstance(v, deque) else v) for k, v in _status.items()})
+
+    def _api_stats(self) -> None:
+        papers = get_papers()
+        state = load_state()
+        stats = get_statistics(papers)
+        stats.update(
+            last_run=state.get("last_run"),
+            new_ids=state.get("last_new_ids") or [],
+            runs=(state.get("runs") or [])[-10:],
+            tracks=config.TRACKS,
+            category_descriptions={k: v["description"] for k, v in config.CATEGORIES.items()},
+            version=__version__,
+        )
+        self._json(stats)
+
+    def _api_digest(self) -> None:
+        papers = get_papers()
+        new = last_new_papers(papers)
+        digest = generate_digest(new, papers)
+        self._json({"summary_text": digest["summary_text"], "new_count": len(new)})
+
+    def _export(self, fmt: str) -> None:
+        papers = get_papers()
+        if fmt == "bib":
+            self._download(to_bibtex(papers), "application/x-bibtex", "3DGenomeHub_papers.bib")
+        elif fmt == "json":
+            self._download(json.dumps(papers, ensure_ascii=False, indent=1), "application/json", "3DGenomeHub_papers.json")
         else:
-            self._serve_json({"ok": False, "message": "Failed to send. Check .env SMTP config."})
+            self._download("﻿" + to_csv(papers), "text/csv", "3DGenomeHub_papers.csv")
 
-    def _handle_run_pipeline(self):
-        if _app_state["status"] == "fetching":
-            self._serve_json({"ok": False, "message": "Already running..."})
-            return
-        def do_pipeline():
-            _app_state["status"] = "fetching"
-            _app_state["message"] = "Running full pipeline (6 databases)..."
-            try:
-                from .pipeline import run_pipeline
-                result = run_pipeline(skip_email=False, skip_readme=False)
-                _app_state["status"] = "done"
-                _app_state["message"] = (
-                    f"Pipeline done! Fetched {result.get('fetched_count', 0)}, "
-                    f"{result.get('new_count', 0)} new. Total: {result.get('total_count', 0)}"
-                )
-            except Exception as e:
-                _app_state["status"] = "error"
-                _app_state["message"] = f"Error: {e}"
-        threading.Thread(target=do_pipeline, daemon=True).start()
-        self._serve_json({"ok": True, "message": "Pipeline started..."})
+    # -- responses -----------------------------------------------------------
+    def _home(self) -> None:
+        self._send(200, HOME_HTML.encode("utf-8"), "text/html; charset=utf-8")
 
-    def _handle_search(self, query: str):
-        papers = load_papers()
-        if not papers or not query:
-            self._serve_json([])
-            return
-        terms = query.lower().split()
-        results = []
-        for p in papers:
-            text = f"{p.get('title', '')} {p.get('abstract', '')} {' '.join(p.get('categories', []))}".lower()
-            score = sum(1 for t in terms if t in text)
-            if score > 0:
-                results.append((score, p))
-        results.sort(key=lambda x: x[0], reverse=True)
-        self._serve_json([p for _, p in results[:50]])
+    def _json(self, data: Any) -> None:
+        self._send(200, json.dumps(data, ensure_ascii=False, default=str).encode("utf-8"), "application/json; charset=utf-8")
 
-    def _handle_export_csv(self):
-        import csv, io
-        papers = load_papers()
-        if not papers:
-            self._serve_error(400, "No papers")
-            return
-        output = io.StringIO()
-        fields = ["title", "authors", "journal", "year", "date", "doi", "url", "source", "categories", "abstract"]
-        writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
-        writer.writeheader()
-        for p in papers:
-            row = {**p}
-            row["authors"] = "; ".join(p.get("authors", []))
-            row["categories"] = "; ".join(p.get("categories", []))
-            writer.writerow(row)
-        self.send_response(200)
-        self.send_header("Content-Type", "text/csv; charset=utf-8")
-        self.send_header("Content-Disposition", "attachment; filename=3DGenomeHub_papers.csv")
-        self.end_headers()
-        self.wfile.write(output.getvalue().encode("utf-8"))
+    def _download(self, text: str, ctype: str, filename: str) -> None:
+        self._send(200, text.encode("utf-8"), f"{ctype}; charset=utf-8",
+                   {"Content-Disposition": f"attachment; filename={filename}"})
 
-    def _serve_home(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.end_headers()
-        self.wfile.write(HOME_HTML.encode("utf-8"))
+    def _error(self, code: int, message: str) -> None:
+        self._send(code, json.dumps({"error": message}).encode("utf-8"), "application/json")
 
-    def _serve_json(self, data):
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.wfile.write(json.dumps(data, ensure_ascii=False, default=str).encode("utf-8"))
-
-    def _serve_error(self, code, message):
+    def _send(self, code: int, payload: bytes, ctype: str, headers: dict[str, str] | None = None) -> None:
         self.send_response(code)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "no-store")
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
         self.end_headers()
-        self.wfile.write(json.dumps({"error": message}).encode("utf-8"))
-
-    def _serve_404(self):
-        self._serve_error(404, "Not found")
+        self.wfile.write(payload)
 
 
-def start_server(port: int = 8686, open_browser: bool = True):
-    logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S", stream=sys.stderr)
-    server = HTTPServer(("0.0.0.0", port), GUIHandler)
-    url = f"http://localhost:{port}"
-    print(f"\n{'='*60}")
-    print(f"  3D Genome & Deep Learning Literature Hub")
-    print(f"  Web GUI: {url}")
-    print(f"  Press Ctrl+C to stop")
-    print(f"{'='*60}\n")
+def make_server(host: str | None = None, port: int | None = None, tries: int = 10) -> ThreadingHTTPServer:
+    host = host or config.WEB_HOST
+    port = port or config.WEB_PORT
+    last_error: OSError | None = None
+    for candidate in range(port, port + tries):
+        try:
+            return ThreadingHTTPServer((host, candidate), GUIHandler)
+        except OSError as exc:
+            last_error = exc
+    raise OSError(f"No free port in {port}-{port + tries - 1}: {last_error}")
+
+
+def start_server(port: int | None = None, open_browser: bool = True, host: str | None = None) -> None:
+    logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(name)s: %(message)s",
+                        datefmt="%H:%M:%S", stream=sys.stderr)
+    server = make_server(host, port)
+    bound_host, bound_port = server.server_address[:2]
+    url = f"http://{'localhost' if bound_host in ('127.0.0.1', '0.0.0.0') else bound_host}:{bound_port}"
+    print(f"\n{'=' * 60}\n  3D Genome & Deep Learning Literature Hub v{__version__}\n  Web GUI: {url}\n"
+          f"  Press Ctrl+C to stop\n{'=' * 60}\n")
     if open_browser:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nShutting down...")
-        server.shutdown()
+    finally:
+        server.server_close()
 
 
 HOME_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>3D Genome & Deep Learning Literature Hub</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3D Genome Literature Hub</title>
 <style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0b0f1a;color:#e2e8f0;min-height:100vh}
-a{color:#93c5fd;text-decoration:none}
-a:hover{text-decoration:underline}
-
-.header{background:linear-gradient(135deg,#1e3a5f 0%,#4c1d95 50%,#831843 100%);padding:28px 20px;text-align:center}
-.header h1{font-size:26px;font-weight:700}
-.header p{opacity:0.8;font-size:14px;margin-top:6px}
-
-.container{max-width:1300px;margin:0 auto;padding:16px}
-
-.status-bar{background:#131a2e;border-radius:8px;padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:10px;border:1px solid #1e293b}
-.status-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
-.status-dot.idle{background:#94a3b8}.status-dot.fetching{background:#fbbf24;animation:pulse 1s infinite}.status-dot.done{background:#34d399}.status-dot.error{background:#f87171}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
-.status-text{font-size:13px;color:#94a3b8}
-
-.actions{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
-.btn{padding:10px 16px;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;color:white;transition:all 0.15s;display:flex;align-items:center;gap:6px}
-.btn:hover{transform:translateY(-1px);box-shadow:0 3px 12px rgba(0,0,0,0.3)}
-.btn:disabled{opacity:0.4;cursor:not-allowed;transform:none}
-.btn-fetch{background:#4f46e5}.btn-readme{background:#0891b2}.btn-email{background:#d97706}.btn-pipeline{background:#059669}.btn-export{background:#7c3aed}
-
-.main-grid{display:grid;grid-template-columns:280px 1fr;gap:14px}
-@media(max-width:900px){.main-grid{grid-template-columns:1fr}}
-
-/* Sidebar */
-.sidebar{display:flex;flex-direction:column;gap:12px}
-.panel{background:#131a2e;border-radius:8px;padding:14px;border:1px solid #1e293b}
-.panel h3{font-size:14px;font-weight:600;color:#f1f5f9;margin-bottom:10px;display:flex;align-items:center;gap:6px}
-
-.stats-mini{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.stat-mini{text-align:center;padding:10px 6px;background:#0b0f1a;border-radius:6px}
-.stat-mini .num{font-size:24px;font-weight:700;color:#818cf8}
-.stat-mini .lbl{font-size:11px;color:#64748b;margin-top:2px}
-
-.filter-group{margin-bottom:10px}
-.filter-group label{font-size:12px;color:#94a3b8;display:block;margin-bottom:4px;font-weight:500}
-.filter-group select,.filter-group input{width:100%;padding:7px 10px;border-radius:6px;border:1px solid #334155;background:#0b0f1a;color:#e2e8f0;font-size:13px;outline:none}
-.filter-group select:focus,.filter-group input:focus{border-color:#818cf8}
-
-.cat-list{max-height:320px;overflow-y:auto;font-size:12px}
-.cat-list::-webkit-scrollbar{width:4px}
-.cat-list::-webkit-scrollbar-thumb{background:#334155;border-radius:2px}
-.cat-item{display:flex;justify-content:space-between;padding:5px 8px;border-radius:4px;cursor:pointer;transition:background 0.1s}
-.cat-item:hover,.cat-item.active{background:#1e293b}
-.cat-item .name{color:#cbd5e1;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.cat-item .cnt{color:#818cf8;font-weight:600;margin-left:6px;flex-shrink:0}
-
-.digest-box{font-size:12px;color:#94a3b8;line-height:1.6;white-space:pre-line;max-height:200px;overflow-y:auto}
-
-/* Content */
-.content{display:flex;flex-direction:column;gap:12px}
-
-.search-bar{display:flex;gap:8px}
-.search-input{flex:1;padding:10px 14px;border-radius:8px;border:1px solid #334155;background:#131a2e;color:#e2e8f0;font-size:14px;outline:none}
-.search-input:focus{border-color:#818cf8}
-.btn-search{background:linear-gradient(135deg,#ec4899,#8b5cf6);padding:10px 20px;border-radius:8px;border:none;color:white;font-weight:600;cursor:pointer;font-size:14px}
-
-.toolbar{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
-.toolbar .info{font-size:13px;color:#94a3b8}
-.sort-sel{padding:6px 10px;border-radius:6px;border:1px solid #334155;background:#131a2e;color:#e2e8f0;font-size:12px;outline:none}
-
-.paper-list{display:flex;flex-direction:column;gap:8px}
-.paper-card{background:#131a2e;border-radius:8px;padding:14px 16px;border:1px solid #1e293b;transition:border-color 0.15s}
-.paper-card:hover{border-color:#4f46e5}
-.paper-title{font-size:14px;font-weight:600;line-height:1.4;margin-bottom:5px}
-.paper-meta{font-size:12px;color:#64748b;margin-bottom:5px}
-.paper-meta .source-tag{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600;margin-left:6px}
-.src-pubmed{background:#164e63;color:#67e8f9}.src-biorxiv{background:#3f3f14;color:#fde047}.src-arxiv{background:#4a1942;color:#f0abfc}
-.src-semantic_scholar{background:#1e3a2f;color:#6ee7b7}.src-europepmc{background:#1e293b;color:#93c5fd}.src-crossref{background:#3b1e0f;color:#fdba74}
-.paper-cats{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:5px}
-.cat-tag{font-size:10px;padding:2px 7px;border-radius:3px;background:#1e293b;color:#a5b4fc;border:1px solid #334155}
-.paper-abstract{font-size:12px;color:#64748b;line-height:1.5;cursor:pointer}
-.paper-abstract.expanded{color:#94a3b8;max-height:none!important}
-.paper-links{margin-top:6px;font-size:12px;display:flex;gap:10px}
-.paper-links a{color:#818cf8}
-
-.pagination{display:flex;justify-content:center;gap:6px;margin-top:10px}
-.page-btn{padding:6px 12px;border-radius:6px;border:1px solid #334155;background:#131a2e;color:#e2e8f0;cursor:pointer;font-size:12px}
-.page-btn:hover,.page-btn.active{background:#4f46e5;border-color:#4f46e5}
-.page-btn:disabled{opacity:0.3;cursor:not-allowed}
-
-.empty-state{text-align:center;padding:50px 20px;color:#475569}
-.footer{text-align:center;padding:20px;color:#334155;font-size:12px;margin-top:10px}
+:root{--bg:#0b1020;--panel:#121a30;--panel2:#0e1528;--line:#23304d;--text:#e5e9f2;--muted:#8b97b0;--dim:#5d6a85;
+--accent:#818cf8;--accent2:#6366f1;--ml:#a78bfa;--comp:#38bdf8;--exp:#94a3b8;--good:#34d399;--warn:#fbbf24;--bad:#f87171}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+a{color:#a5b4fc;text-decoration:none}a:hover{text-decoration:underline}
+button{font:inherit;cursor:pointer}
+header{padding:22px 20px 18px;background:linear-gradient(120deg,#1e2a5a,#3b1f6b 60%,#5b1a4a);border-bottom:1px solid var(--line)}
+header h1{font-size:22px;font-weight:700;letter-spacing:.2px}
+header p{color:#c7cff0;font-size:13px;margin-top:4px}
+.wrap{max-width:1360px;margin:0 auto;padding:14px 16px 40px}
+.actions{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+.btn{border:1px solid var(--line);background:var(--panel);color:var(--text);padding:8px 13px;border-radius:8px;font-weight:600;font-size:13px}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent2);border-color:var(--accent2)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.status{display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:9px 12px;margin-bottom:14px;font-size:13px;color:var(--muted)}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--exp);flex:none}
+.dot.running{background:var(--warn);animation:pulse 1s infinite}.dot.done{background:var(--good)}.dot.error{background:var(--bad)}
+@keyframes pulse{50%{opacity:.3}}
+.status .msg{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.status button{background:none;border:none;color:var(--accent);font-size:12px}
+#log{display:none;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px;margin:-8px 0 14px;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;color:var(--muted);max-height:220px;overflow:auto;white-space:pre-wrap}
+.grid{display:grid;grid-template-columns:290px minmax(0,1fr);gap:14px}
+@media(max-width:900px){.grid{grid-template-columns:1fr}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:13px;margin-bottom:12px}
+.panel h3{font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:9px}
+.kpis{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.kpi{background:var(--panel2);border-radius:8px;padding:9px;text-align:center}
+.kpi b{display:block;font-size:21px;color:var(--accent)}.kpi span{font-size:11px;color:var(--dim)}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:999px;padding:4px 10px;font-size:12px}
+.chip.on{background:var(--accent2);border-color:var(--accent2)}
+.list{max-height:330px;overflow:auto}
+.item{display:flex;justify-content:space-between;gap:6px;padding:5px 8px;border-radius:6px;cursor:pointer;font-size:12.5px}
+.item:hover{background:var(--panel2)}.item.on{background:#27305a}
+.item .n{color:var(--accent);font-weight:600}
+label.f{display:block;font-size:12px;color:var(--muted);margin:8px 0 4px}
+select,input[type=text],input[type=search]{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:7px 9px;font:inherit;font-size:13px}
+.row{display:flex;gap:6px}
+.check{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--text);margin-top:6px}
+.searchbar{display:flex;gap:8px;margin-bottom:10px}
+.searchbar input{font-size:14px;padding:10px 12px}
+.toolbar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;color:var(--muted);font-size:13px}
+.toolbar select{width:auto}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:13px 15px;margin-bottom:9px}
+.card:hover{border-color:#3a4a78}
+.card h2{font-size:15px;line-height:1.35;margin:4px 0 4px}
+.meta{font-size:12.5px;color:var(--muted)}
+.badges{display:flex;gap:5px;flex-wrap:wrap;align-items:center}
+.b{font-size:10.5px;font-weight:700;border-radius:4px;padding:1px 6px;letter-spacing:.3px}
+.b.ml{background:#2e1f5e;color:var(--ml)}.b.computational{background:#0c2f45;color:var(--comp)}.b.experimental{background:#27303f;color:#cbd5e1}
+.b.new{background:#0f3d2c;color:var(--good)}.b.pre{background:#3d3212;color:var(--warn)}.b.cur{background:#4a1d3d;color:#f9a8d4}
+.rel{margin-left:auto;font-size:11px;color:var(--dim)}
+.tags{display:flex;flex-wrap:wrap;gap:5px;margin:7px 0 4px}
+.tag{font-size:11px;border:1px solid var(--line);border-radius:4px;padding:1px 7px;background:var(--panel2);color:#c3cbe0;cursor:pointer}
+.tag.m{color:var(--ml)}
+.abs{font-size:12.8px;color:#a9b3c9;margin-top:5px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;cursor:pointer}
+.abs.open{display:block}
+.links{display:flex;flex-wrap:wrap;gap:12px;margin-top:7px;font-size:12.5px}
+.pager{display:flex;justify-content:center;gap:5px;flex-wrap:wrap;margin-top:12px}
+.pager button{background:var(--panel);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:5px 11px;font-size:12px}
+.pager button.on{background:var(--accent2);border-color:var(--accent2)}
+.empty{text-align:center;color:var(--dim);padding:50px 10px}
+.modal{display:none;position:fixed;inset:0;background:rgba(3,6,15,.82);z-index:10;overflow:auto;padding:24px 12px}
+.modal.open{display:block}
+.sheet{max-width:1100px;margin:0 auto;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:22px;position:relative}
+.sheet h2{font-size:19px;margin-bottom:14px}.sheet h3{font-size:14px;margin:18px 0 8px;color:#dbe2f3}
+.close{position:absolute;top:10px;right:14px;background:none;border:none;color:var(--muted);font-size:26px}
+pre.sum{background:var(--panel2);border-radius:8px;padding:12px;font:12px/1.55 ui-monospace,Menlo,Consolas,monospace;color:#c7d2fe;white-space:pre-wrap;overflow:auto}
+.bar{display:flex;align-items:center;gap:8px;font-size:12.5px;margin:3px 0}
+.bar span:first-child{width:190px;flex:none;color:#cbd5e1}
+.bar .track{flex:1;background:var(--panel2);height:14px;border-radius:3px;overflow:hidden}
+.bar .fill{height:100%;background:linear-gradient(90deg,var(--accent2),var(--ml))}
+.bar .v{width:44px;text-align:right;color:var(--accent)}
+table.t{width:100%;border-collapse:collapse;font-size:12.5px}
+table.t th,table.t td{padding:6px 7px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+table.t th{color:var(--muted);font-weight:600}
+.scroll{overflow-x:auto}
+td.h{text-align:center;color:#fff;min-width:44px}
+footer{color:var(--dim);text-align:center;font-size:12px;padding:10px}
 </style>
 </head>
 <body>
+<header>
+  <h1>3D Genome × Deep Learning Literature Hub</h1>
+  <p id="sub">Loading…</p>
+</header>
+<div class="wrap">
+  <div class="actions">
+    <button class="btn primary" data-act="/api/fetch" title="Fetch papers published since the last update, filter, merge and save">Update now</button>
+    <button class="btn" data-act="/api/run-pipeline" title="Update + regenerate README/topic pages + send email digest">Full pipeline</button>
+    <button class="btn" data-act="/api/backfill" title="Relevance-ranked search across all years (slower)">Backfill all years</button>
+    <button class="btn" data-act="/api/update-readme">Rebuild README</button>
+    <button class="btn" data-act="/api/send-email">Send email digest</button>
+    <button class="btn" id="btnAnalysis">Landscape analysis</button>
+    <a class="btn" href="/api/export?format=csv">Export CSV</a>
+    <a class="btn" href="/api/export?format=bib">Export BibTeX</a>
+  </div>
+  <div class="status"><span class="dot" id="dot"></span><span class="msg" id="msg">Ready</span><button id="logBtn">show log</button></div>
+  <div id="log"></div>
 
-<div class="header">
-    <h1>3D Genome & Deep Learning Literature Hub</h1>
-    <p>Comprehensive Auto-updating Research Tracker | 6 Databases | 19 Categories</p>
-</div>
-
-<div class="container">
-    <div class="status-bar">
-        <div class="status-dot" id="statusDot"></div>
-        <span class="status-text" id="statusText">Ready</span>
-    </div>
-
-    <div class="actions">
-        <button class="btn btn-fetch" onclick="doAction('/api/fetch')">Fetch Papers (6 DBs)</button>
-        <button class="btn btn-pipeline" onclick="doAction('/api/run-pipeline')">One-Click Full Pipeline</button>
-        <button class="btn btn-readme" onclick="doAction('/api/update-readme')">Update README</button>
-        <button class="btn btn-email" onclick="doAction('/api/send-email')">Send Email Digest</button>
-        <button class="btn btn-export" onclick="location.href='/api/export-csv'">Export CSV</button>
-        <button class="btn" style="background:#b91c1c" onclick="showAnalysis()">AI Analysis</button>
-    </div>
-
-    <!-- AI Analysis Modal -->
-    <div id="analysisModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:999;overflow-y:auto">
-      <div style="max-width:1000px;margin:30px auto;background:#131a2e;border-radius:12px;padding:24px;border:1px solid #334155;position:relative">
-        <button onclick="document.getElementById('analysisModal').style.display='none'" style="position:absolute;top:12px;right:16px;background:none;border:none;color:#94a3b8;font-size:24px;cursor:pointer">&times;</button>
-        <h2 style="font-size:20px;color:#f1f5f9;margin-bottom:16px">AI Research Analysis: 3D Genome × Deep Learning</h2>
-        <div id="analysisContent" style="color:#cbd5e1">
-          <p style="color:#94a3b8">Loading analysis...</p>
+  <div class="grid">
+    <aside>
+      <div class="panel">
+        <h3>Overview</h3>
+        <div class="kpis">
+          <div class="kpi"><b id="kTotal">–</b><span>papers</span></div>
+          <div class="kpi"><b id="kMl">–</b><span>AI / ML</span></div>
+          <div class="kpi"><b id="kRecent">–</b><span>since last year</span></div>
+          <div class="kpi"><b id="kNew">–</b><span>new in last update</span></div>
         </div>
       </div>
-    </div>
+      <div class="panel">
+        <h3>Track</h3>
+        <div class="chips" id="tracks"></div>
+      </div>
+      <div class="panel">
+        <h3>Topics</h3>
+        <div class="list" id="cats"></div>
+      </div>
+      <div class="panel">
+        <h3>Architectures</h3>
+        <div class="list" id="methods" style="max-height:230px"></div>
+      </div>
+      <div class="panel">
+        <h3>Filters</h3>
+        <label class="f">Source</label>
+        <select id="source"><option value="">All databases</option></select>
+        <label class="f">Years</label>
+        <div class="row"><select id="yFrom"><option value="">From</option></select><select id="yTo"><option value="">To</option></select></div>
+        <label class="check"><input type="checkbox" id="onlyNew"> New in last update</label>
+        <label class="check"><input type="checkbox" id="onlyPre"> Preprints only</label>
+        <label class="check"><input type="checkbox" id="onlyCur"> Landmark papers only</label>
+        <label class="check"><input type="checkbox" id="onlyAbs"> With abstract</label>
+        <button class="btn" id="reset" style="margin-top:10px;width:100%">Reset filters</button>
+      </div>
+    </aside>
 
-    <div class="main-grid">
-        <!-- Sidebar -->
-        <div class="sidebar">
-            <div class="panel">
-                <h3>Statistics</h3>
-                <div class="stats-mini">
-                    <div class="stat-mini"><div class="num" id="sTotal">-</div><div class="lbl">Papers</div></div>
-                    <div class="stat-mini"><div class="num" id="sSources">-</div><div class="lbl">Sources</div></div>
-                    <div class="stat-mini"><div class="num" id="sCats">-</div><div class="lbl">Categories</div></div>
-                    <div class="stat-mini"><div class="num" id="sYears">-</div><div class="lbl">Year Span</div></div>
-                </div>
-            </div>
-
-            <div class="panel">
-                <h3>Filters</h3>
-                <div class="filter-group">
-                    <label>Source</label>
-                    <select id="filterSource" onchange="applyFilters()"><option value="">All Sources</option></select>
-                </div>
-                <div class="filter-group">
-                    <label>Year Range</label>
-                    <div style="display:flex;gap:4px">
-                        <select id="filterYearFrom" onchange="applyFilters()"><option value="">From</option></select>
-                        <select id="filterYearTo" onchange="applyFilters()"><option value="">To</option></select>
-                    </div>
-                </div>
-                <div class="filter-group">
-                    <label>Sort By</label>
-                    <select id="sortBy" onchange="applyFilters()">
-                        <option value="date_desc">Newest First</option>
-                        <option value="date_asc">Oldest First</option>
-                        <option value="title_asc">Title A-Z</option>
-                        <option value="relevance" id="sortRelevance" style="display:none">Relevance</option>
-                    </select>
-                </div>
-            </div>
-
-            <div class="panel">
-                <h3>Categories</h3>
-                <div class="cat-list" id="catList"></div>
-            </div>
-
-            <div class="panel">
-                <h3>DL Methods</h3>
-                <div class="cat-list" id="dlMethodList" style="max-height:200px"><span style="color:#64748b;font-size:12px">Click "AI Analysis"</span></div>
-            </div>
-
-            <div class="panel">
-                <h3>Hot Topics</h3>
-                <div id="hotTopics" style="font-size:12px;color:#94a3b8;max-height:200px;overflow-y:auto"><span style="color:#64748b">Click "AI Analysis"</span></div>
-            </div>
-
-            <div class="panel">
-                <h3>Latest Digest</h3>
-                <div class="digest-box" id="digestBox">Loading...</div>
-            </div>
-        </div>
-
-        <!-- Content -->
-        <div class="content">
-            <div class="search-bar">
-                <input class="search-input" id="searchInput" type="text" placeholder="Search papers by title, abstract, author, category..." onkeydown="if(event.key==='Enter')doSearch()">
-                <button class="btn-search" onclick="doSearch()">Search</button>
-            </div>
-
-            <div class="toolbar">
-                <span class="info" id="resultInfo">Loading papers...</span>
-            </div>
-
-            <div class="paper-list" id="paperList">
-                <div class="empty-state"><p>Loading...</p></div>
-            </div>
-
-            <div class="pagination" id="pagination"></div>
-        </div>
-    </div>
+    <main>
+      <div class="searchbar"><input type="search" id="q" placeholder='Search title, abstract, authors, venue, tags — e.g. Hi-C transformer, "loop extrusion"'></div>
+      <div class="toolbar">
+        <span id="info">Loading…</span>
+        <select id="sort">
+          <option value="relevance">Sort: relevance</option>
+          <option value="newest">Sort: newest</option>
+          <option value="oldest">Sort: oldest</option>
+          <option value="cited">Sort: most cited</option>
+          <option value="title">Sort: title</option>
+        </select>
+      </div>
+      <div id="list"></div>
+      <div class="pager" id="pager"></div>
+    </main>
+  </div>
 </div>
+<footer>3DGenomeHub <span id="ver"></span> · <a href="https://github.com/Yin-Shen/3DGenomeHub" target="_blank" rel="noopener">GitHub</a></footer>
 
-<div class="footer">3D Genome & Deep Learning Literature Hub &mdash; <a href="https://github.com/Yin-Shen/3DGenomeHub">GitHub</a></div>
+<div class="modal" id="modal"><div class="sheet"><button class="close" id="closeModal" aria-label="Close">×</button>
+  <h2>Research landscape: 3D genome × deep learning</h2><div id="analysis">Loading…</div></div></div>
 
 <script>
-let ALL_PAPERS = [];
-let FILTERED = [];
-let PAGE = 1;
 const PER_PAGE = 25;
-let polling = null;
-let activeCategory = "";
-let searchMode = false;
+const S = {papers: [], stats: {}, newIds: new Set(), f: {q: '', track: '', cat: '', method: '', source: '', yFrom: 0, yTo: 9999, onlyNew: false, onlyPre: false, onlyCur: false, onlyAbs: false}, sort: 'relevance', page: 1, view: []};
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+const TRACK_NAMES = {ml: 'AI / ML', computational: 'Computational', experimental: 'Experimental & Biology'};
+let poll = null;
 
-function updateStatus(s, m) {
-    document.getElementById('statusDot').className = 'status-dot ' + (s||'idle');
-    document.getElementById('statusText').textContent = m || 'Ready';
+async function getJSON(url) { const r = await fetch(url); if (!r.ok) throw new Error(r.status); return r.json(); }
+
+async function loadAll() {
+  const [papers, stats] = await Promise.all([getJSON('/api/papers'), getJSON('/api/stats')]);
+  S.papers = papers; S.stats = stats; S.newIds = new Set(stats.new_ids || []);
+  renderSidebar(); apply();
 }
 
-function pollStatus() {
-    fetch('/api/status').then(r=>r.json()).then(d=>{
-        updateStatus(d.status, d.message);
-        if(d.status==='done'||d.status==='error'){clearInterval(polling);polling=null;loadAll();}
-    }).catch(()=>{});
+function renderSidebar() {
+  const s = S.stats;
+  $('kTotal').textContent = s.total_papers || 0;
+  $('kMl').textContent = s.ml_papers || 0;
+  $('kRecent').textContent = s.recent_papers || 0;
+  $('kNew').textContent = S.newIds.size;
+  $('ver').textContent = s.version ? 'v' + s.version : '';
+  $('sub').textContent = s.total_papers
+    ? `${s.total_papers} papers · ${s.ml_papers} AI/ML · ${s.preprints} preprints · last update ${s.last_run ? s.last_run.slice(0, 10) : 'never'}`
+    : 'Database is empty — click "Update now" (or "Backfill all years" for full coverage).';
+  const tracks = [['', 'All', s.total_papers || 0], ...Object.entries(s.by_track || {}).map(([k, v]) => [k, TRACK_NAMES[k] || k, v])];
+  $('tracks').innerHTML = tracks.map(([k, name, n]) => `<button class="chip${S.f.track === k ? ' on' : ''}" data-track="${esc(k)}">${esc(name)} (${n})</button>`).join('');
+  const desc = s.category_descriptions || {};
+  $('cats').innerHTML = Object.entries(s.by_category || {}).map(([c, n]) =>
+    `<div class="item${S.f.cat === c ? ' on' : ''}" data-cat="${esc(c)}" title="${esc(desc[c] || c)}"><span>${esc(c)}</span><span class="n">${n}</span></div>`).join('') || '<span class="meta">No papers yet</span>';
+  $('methods').innerHTML = Object.entries(s.by_method || {}).map(([m, n]) =>
+    `<div class="item${S.f.method === m ? ' on' : ''}" data-method="${esc(m)}"><span>${esc(m)}</span><span class="n">${n}</span></div>`).join('') || '<span class="meta">No AI/ML papers yet</span>';
+  const src = $('source'), cur = S.f.source;
+  src.innerHTML = '<option value="">All databases</option>' + Object.entries(s.by_source || {}).map(([k, n]) => `<option value="${esc(k)}">${esc(k)} (${n})</option>`).join('');
+  src.value = cur;
+  const years = Object.keys(s.by_year || {}).sort((a, b) => b - a);
+  for (const id of ['yFrom', 'yTo']) {
+    const el = $(id), v = el.value;
+    el.innerHTML = `<option value="">${id === 'yFrom' ? 'From' : 'To'}</option>` + years.map(y => `<option>${y}</option>`).join('');
+    el.value = v;
+  }
 }
 
-function doAction(ep) {
-    fetch(ep,{method:'POST'}).then(r=>r.json()).then(d=>{
-        updateStatus('fetching', d.message);
-        if(!polling) polling = setInterval(pollStatus, 2000);
-    });
+function tokens(q) { return [...q.matchAll(/"([^"]+)"|(\S+)/g)].map(m => (m[1] || m[2]).toLowerCase()); }
+
+function searchScore(p, terms) {
+  const title = (p.title || '').toLowerCase();
+  const tags = [...(p.categories || []), ...(p.dl_methods || []), ...(p.tools || []), ...(p.keywords || [])].join(' ').toLowerCase();
+  const other = [p.abstract, (p.authors || []).join(' '), p.journal, p.doi].join(' ').toLowerCase();
+  let score = 0;
+  for (const t of terms) {
+    if (title.includes(t)) score += 3; else if (tags.includes(t)) score += 2; else if (other.includes(t)) score += 1; else return -1;
+  }
+  return score;
 }
 
-function doSearch() {
-    const q = document.getElementById('searchInput').value.trim();
-    if(!q){searchMode=false;document.getElementById('sortRelevance').style.display='none';applyFilters();return;}
-    searchMode = true;
-    document.getElementById('sortRelevance').style.display='';
-    document.getElementById('sortBy').value='relevance';
-    fetch('/api/search',{method:'POST',body:'q='+encodeURIComponent(q),headers:{'Content-Type':'application/x-www-form-urlencoded'}})
-        .then(r=>r.json()).then(papers=>{
-            FILTERED = papers;
-            PAGE = 1;
-            renderResults(`Search: "${q}" (${papers.length} results)`);
-        });
+function apply() {
+  const f = S.f, terms = tokens(f.q);
+  let rows = [];
+  for (const p of S.papers) {
+    if (f.track && p.track !== f.track) continue;
+    if (f.cat && !(p.categories || []).includes(f.cat)) continue;
+    if (f.method && !(p.dl_methods || []).includes(f.method)) continue;
+    if (f.source && !(p.sources || [p.source]).includes(f.source)) continue;
+    if ((p.year || 0) < f.yFrom || (p.year || 0) > f.yTo) continue;
+    if (f.onlyNew && !S.newIds.has(p.id)) continue;
+    if (f.onlyPre && !p.is_preprint) continue;
+    if (f.onlyCur && !p.curated) continue;
+    if (f.onlyAbs && !p.abstract) continue;
+    let score = 0;
+    if (terms.length) { score = searchScore(p, terms); if (score < 0) continue; }
+    rows.push([score + (p.relevance || 0) / 100, p]);
+  }
+  const by = {
+    relevance: (a, b) => b[0] - a[0] || (b[1].date || '').localeCompare(a[1].date || ''),
+    newest: (a, b) => (b[1].date || '').localeCompare(a[1].date || ''),
+    oldest: (a, b) => (a[1].date || '').localeCompare(b[1].date || ''),
+    cited: (a, b) => (b[1].citations || 0) - (a[1].citations || 0),
+    title: (a, b) => (a[1].title || '').localeCompare(b[1].title || ''),
+  };
+  rows.sort(by[S.sort]);
+  S.view = rows.map(r => r[1]);
+  const active = [f.track && TRACK_NAMES[f.track], f.cat, f.method, f.source, f.q && `"${f.q}"`].filter(Boolean);
+  $('info').textContent = `${S.view.length} papers` + (active.length ? ' · ' + active.join(' · ') : '');
+  render();
 }
 
-function applyFilters() {
-    if(searchMode && document.getElementById('sortBy').value==='relevance') { renderPaginated(); return; }
-    searchMode = false;
-    const src = document.getElementById('filterSource').value;
-    const yFrom = parseInt(document.getElementById('filterYearFrom').value) || 0;
-    const yTo = parseInt(document.getElementById('filterYearTo').value) || 9999;
-    const sort = document.getElementById('sortBy').value;
-
-    FILTERED = ALL_PAPERS.filter(p => {
-        if(src && p.source !== src) return false;
-        if(p.year < yFrom || p.year > yTo) return false;
-        if(activeCategory && !(p.categories||[]).includes(activeCategory)) return false;
-        return true;
-    });
-
-    if(sort==='date_desc') FILTERED.sort((a,b)=>(b.date||'').localeCompare(a.date||''));
-    else if(sort==='date_asc') FILTERED.sort((a,b)=>(a.date||'').localeCompare(b.date||''));
-    else if(sort==='title_asc') FILTERED.sort((a,b)=>(a.title||'').localeCompare(b.title||''));
-
-    PAGE = 1;
-    const label = activeCategory ? `${activeCategory} (${FILTERED.length})` : `All Papers (${FILTERED.length})`;
-    renderResults(label);
+function card(p) {
+  const authors = (p.authors || []).length > 3 ? p.authors.slice(0, 3).join(', ') + ' et al.' : (p.authors || []).join(', ') || 'Unknown authors';
+  const badges = [`<span class="b ${esc(p.track)}">${esc(TRACK_NAMES[p.track] || p.track)}</span>`];
+  if (S.newIds.has(p.id)) badges.push('<span class="b new">NEW</span>');
+  if (p.is_preprint) badges.push('<span class="b pre">PREPRINT</span>');
+  if (p.curated) badges.push('<span class="b cur">LANDMARK</span>');
+  const tags = (p.categories || []).map(c => `<span class="tag" data-cat="${esc(c)}">${esc(c)}</span>`)
+    .concat((p.dl_methods || []).map(m => `<span class="tag m" data-method="${esc(m)}">${esc(m)}</span>`)).join('');
+  const links = [];
+  if (p.doi) links.push(`<a href="https://doi.org/${esc(p.doi)}" target="_blank" rel="noopener">DOI</a>`);
+  if (p.pmid) links.push(`<a href="https://pubmed.ncbi.nlm.nih.gov/${esc(p.pmid)}/" target="_blank" rel="noopener">PubMed</a>`);
+  if (p.arxiv_id) links.push(`<a href="https://arxiv.org/abs/${esc(p.arxiv_id)}" target="_blank" rel="noopener">arXiv</a>`);
+  if (p.pdf_url) links.push(`<a href="${esc(p.pdf_url)}" target="_blank" rel="noopener">PDF</a>`);
+  links.push(`<a href="https://scholar.google.com/scholar?q=${encodeURIComponent(p.title || '')}" target="_blank" rel="noopener">Scholar</a>`);
+  const cites = p.citations ? ` · ${p.citations} citations` : '';
+  return `<article class="card">
+    <div class="badges">${badges.join('')}<span class="rel" title="Relevance score (0-100)">relevance ${p.relevance ?? '–'}</span></div>
+    <h2>${p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.title)}</a>` : esc(p.title)}</h2>
+    <div class="meta">${esc(authors)} · <i>${esc(p.journal || 'n/a')}</i> · ${esc(p.date || p.year || '')}${cites}</div>
+    <div class="tags">${tags}</div>
+    ${p.abstract ? `<p class="abs" title="Click to expand">${esc(p.abstract)}</p>` : ''}
+    <div class="links">${links.join('')}</div>
+  </article>`;
 }
 
-function renderResults(label) {
-    document.getElementById('resultInfo').textContent = label;
-    renderPaginated();
-}
-
-function renderPaginated() {
-    const total = FILTERED.length;
-    const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
-    if(PAGE > totalPages) PAGE = totalPages;
-    const start = (PAGE-1)*PER_PAGE;
-    const slice = FILTERED.slice(start, start+PER_PAGE);
-    renderPapers(slice);
-    renderPagination(totalPages);
-}
-
-function renderPapers(papers) {
-    const list = document.getElementById('paperList');
-    if(!papers.length){list.innerHTML='<div class="empty-state"><p>No papers found. Click "Fetch Papers" to get started!</p></div>';return;}
-    list.innerHTML = papers.map(p => {
-        const authors = (p.authors||[]).length>2 ? p.authors[0]+' et al.' : (p.authors||[]).join(', ')||'Unknown';
-        const cats = (p.categories||[]).map(c=>`<span class="cat-tag">${esc(c)}</span>`).join('');
-        const srcClass = 'src-'+(p.source||'').replace(/ /g,'_');
-        const abs = p.abstract||'';
-        const absShort = abs.length>300 ? abs.substring(0,300)+'...' : abs;
-        const links = [];
-        if(p.url) links.push(`<a href="${esc(p.url)}" target="_blank">Paper</a>`);
-        if(p.doi) links.push(`<a href="https://doi.org/${esc(p.doi)}" target="_blank">DOI</a>`);
-        if(p.doi) links.push(`<a href="https://scholar.google.com/scholar?q=${encodeURIComponent(p.title)}" target="_blank">Google Scholar</a>`);
-        return `<div class="paper-card">
-            <div class="paper-title"><a href="${esc(p.url||'#')}" target="_blank">${esc(p.title)}</a></div>
-            <div class="paper-meta">${esc(authors)} · ${esc(p.journal||'')} (${p.year||''}) <span class="source-tag ${srcClass}">${esc(p.source||'')}</span></div>
-            <div class="paper-cats">${cats}</div>
-            ${abs ? `<div class="paper-abstract" onclick="this.classList.toggle('expanded');this.textContent=this.classList.contains('expanded')?'${esc(abs).replace(/'/g,"\\'")}':'${esc(absShort).replace(/'/g,"\\'")}';" style="max-height:60px;overflow:hidden">${esc(absShort)}</div>` : ''}
-            <div class="paper-links">${links.join(' · ')}</div>
-        </div>`;
-    }).join('');
-}
-
-function renderPagination(totalPages) {
-    const el = document.getElementById('pagination');
-    if(totalPages<=1){el.innerHTML='';return;}
-    let html = `<button class="page-btn" onclick="goPage(${PAGE-1})" ${PAGE<=1?'disabled':''}>Prev</button>`;
-    const range = 2;
-    for(let i=1;i<=totalPages;i++){
-        if(i===1||i===totalPages||Math.abs(i-PAGE)<=range){
-            html+=`<button class="page-btn${i===PAGE?' active':''}" onclick="goPage(${i})">${i}</button>`;
-        } else if(i===PAGE-range-1||i===PAGE+range+1){
-            html+=`<button class="page-btn" disabled>...</button>`;
-        }
+function render() {
+  const pages = Math.max(1, Math.ceil(S.view.length / PER_PAGE));
+  S.page = Math.min(S.page, pages);
+  const slice = S.view.slice((S.page - 1) * PER_PAGE, S.page * PER_PAGE);
+  $('list').innerHTML = slice.length ? slice.map(card).join('')
+    : `<div class="empty">${S.papers.length ? 'No papers match the current filters.' : 'No papers yet — click <b>Update now</b> or <b>Backfill all years</b>.'}</div>`;
+  const btn = (p, label, on) => `<button data-page="${p}" class="${on ? 'on' : ''}" ${p < 1 || p > pages ? 'disabled' : ''}>${label}</button>`;
+  let html = '';
+  if (pages > 1) {
+    html += btn(S.page - 1, '‹ Prev');
+    for (let i = 1; i <= pages; i++) {
+      if (i === 1 || i === pages || Math.abs(i - S.page) <= 2) html += btn(i, i, i === S.page);
+      else if (Math.abs(i - S.page) === 3) html += '<button disabled>…</button>';
     }
-    html+=`<button class="page-btn" onclick="goPage(${PAGE+1})" ${PAGE>=totalPages?'disabled':''}>Next</button>`;
-    el.innerHTML=html;
-}
-function goPage(p){PAGE=p;renderPaginated();window.scrollTo({top:300,behavior:'smooth'});}
-
-function selectCategory(cat) {
-    activeCategory = (activeCategory===cat) ? "" : cat;
-    document.querySelectorAll('.cat-item').forEach(el=>{
-        el.classList.toggle('active', el.dataset.cat===activeCategory);
-    });
-    searchMode=false;
-    document.getElementById('searchInput').value='';
-    applyFilters();
+    html += btn(S.page + 1, 'Next ›');
+  }
+  $('pager').innerHTML = html;
 }
 
-function loadAll() {
-    fetch('/api/papers').then(r=>r.json()).then(papers=>{
-        ALL_PAPERS = papers;
-        FILTERED = [...papers];
-        FILTERED.sort((a,b)=>(b.date||'').localeCompare(a.date||''));
-        loadStats();
-        loadDigest();
-        applyFilters();
-    });
+function setFilter(key, value) {
+  S.f[key] = S.f[key] === value ? '' : value; S.page = 1; renderSidebar(); apply();
 }
 
-function loadStats() {
-    fetch('/api/stats').then(r=>r.json()).then(s=>{
-        document.getElementById('sTotal').textContent = s.total_papers||0;
-        document.getElementById('sSources').textContent = Object.keys(s.by_source||{}).length;
-        document.getElementById('sCats').textContent = (s.categories||[]).length;
-        const years = (s.years||[]);
-        document.getElementById('sYears').textContent = years.length>=2 ? years[years.length-1]+'-'+years[0] : (years[0]||'-');
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-track],[data-cat],[data-method],[data-page],[data-act],.abs');
+  if (!t) return;
+  if (t.classList.contains('abs')) { t.classList.toggle('open'); return; }
+  if (t.dataset.act) { runAction(t.dataset.act); return; }
+  if (t.dataset.page) { S.page = +t.dataset.page; render(); window.scrollTo({top: 0, behavior: 'smooth'}); return; }
+  if ('track' in t.dataset) return setFilter('track', t.dataset.track);
+  if (t.dataset.cat) return setFilter('cat', t.dataset.cat);
+  if (t.dataset.method) return setFilter('method', t.dataset.method);
+});
 
-        // Populate filters
-        const srcSel = document.getElementById('filterSource');
-        srcSel.innerHTML = '<option value="">All Sources</option>';
-        (s.sources||[]).forEach(src=>{srcSel.innerHTML+=`<option value="${src}">${src} (${(s.by_source||{})[src]||0})</option>`;});
+let qTimer = null;
+$('q').addEventListener('input', e => { clearTimeout(qTimer); qTimer = setTimeout(() => { S.f.q = e.target.value.trim(); S.page = 1; apply(); }, 180); });
+$('sort').addEventListener('change', e => { S.sort = e.target.value; apply(); });
+$('source').addEventListener('change', e => { S.f.source = e.target.value; S.page = 1; apply(); });
+$('yFrom').addEventListener('change', e => { S.f.yFrom = +e.target.value || 0; S.page = 1; apply(); });
+$('yTo').addEventListener('change', e => { S.f.yTo = +e.target.value || 9999; S.page = 1; apply(); });
+for (const id of ['onlyNew', 'onlyPre', 'onlyCur', 'onlyAbs']) $(id).addEventListener('change', e => { S.f[id] = e.target.checked; S.page = 1; apply(); });
+$('reset').addEventListener('click', () => {
+  S.f = {q: '', track: '', cat: '', method: '', source: '', yFrom: 0, yTo: 9999, onlyNew: false, onlyPre: false, onlyCur: false, onlyAbs: false};
+  $('q').value = ''; for (const id of ['onlyNew', 'onlyPre', 'onlyCur', 'onlyAbs']) $(id).checked = false;
+  $('yFrom').value = ''; $('yTo').value = ''; S.page = 1; renderSidebar(); apply();
+});
+$('logBtn').addEventListener('click', () => { const l = $('log'); const open = l.style.display === 'block'; l.style.display = open ? 'none' : 'block'; $('logBtn').textContent = open ? 'show log' : 'hide log'; });
 
-        const yFromSel = document.getElementById('filterYearFrom');
-        const yToSel = document.getElementById('filterYearTo');
-        yFromSel.innerHTML='<option value="">From</option>';
-        yToSel.innerHTML='<option value="">To</option>';
-        years.forEach(y=>{yFromSel.innerHTML+=`<option value="${y}">${y}</option>`;yToSel.innerHTML+=`<option value="${y}">${y}</option>`;});
-
-        // Category list
-        const catList = document.getElementById('catList');
-        const cc = s.category_counts||{};
-        catList.innerHTML = Object.entries(cc).map(([cat,cnt])=>
-            `<div class="cat-item" data-cat="${esc(cat)}" onclick="selectCategory('${esc(cat).replace(/'/g,"\\'")}')"><span class="name" title="${esc(cat)}">${esc(cat)}</span><span class="cnt">${cnt}</span></div>`
-        ).join('');
-    });
+function setStatus(d) {
+  $('dot').className = 'dot ' + (d.status || 'idle');
+  $('msg').textContent = d.message || 'Ready';
+  $('log').textContent = (d.log || []).join('\n');
+  $('log').scrollTop = $('log').scrollHeight;
+  document.querySelectorAll('[data-act]').forEach(b => b.disabled = d.status === 'running');
 }
 
-function loadDigest() {
-    fetch('/api/digest').then(r=>r.json()).then(d=>{
-        document.getElementById('digestBox').textContent = d.summary_text || 'No digest available.';
-    }).catch(()=>{});
+async function runAction(url) {
+  if (url === '/api/send-email' && !confirm('Send the email digest of the last update to all configured recipients?')) return;
+  const r = await fetch(url, {method: 'POST', headers: {'X-Requested-With': '3DGenomeHub'}});
+  const d = await r.json();
+  setStatus({status: d.ok ? 'running' : 'error', message: d.message});
+  if (d.ok && !poll) poll = setInterval(checkStatus, 1500);
 }
 
-function showAnalysis() {
-    const modal = document.getElementById('analysisModal');
-    modal.style.display = 'block';
-    document.getElementById('analysisContent').innerHTML = '<p style="color:#fbbf24">Analyzing papers... This may take a moment.</p>';
-    fetch('/api/analysis').then(r=>r.json()).then(a=>{
-        let html = '';
-
-        // Summary
-        html += `<div style="background:#0b0f1a;border-radius:8px;padding:16px;margin-bottom:16px;white-space:pre-line;font-size:13px;line-height:1.6;font-family:monospace;color:#a5b4fc">${esc(a.research_summary||'')}</div>`;
-
-        // DL stats
-        html += `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px">`;
-        html += `<div style="background:#1e1b4b;border-radius:8px;padding:14px;text-align:center"><div style="font-size:28px;font-weight:700;color:#818cf8">${a.dl_paper_count||0}</div><div style="font-size:12px;color:#94a3b8">DL Papers</div></div>`;
-        html += `<div style="background:#1e1b4b;border-radius:8px;padding:14px;text-align:center"><div style="font-size:28px;font-weight:700;color:#34d399">${a.dl_ratio||0}%</div><div style="font-size:12px;color:#94a3b8">DL Ratio</div></div>`;
-        html += `<div style="background:#1e1b4b;border-radius:8px;padding:14px;text-align:center"><div style="font-size:28px;font-weight:700;color:#fbbf24">${Object.keys(a.dl_method_distribution||{}).length}</div><div style="font-size:12px;color:#94a3b8">DL Methods</div></div>`;
-        html += `</div>`;
-
-        // DL Method distribution bar chart
-        const methods = a.dl_method_distribution || {};
-        if(Object.keys(methods).length) {
-            html += `<h3 style="font-size:15px;margin-bottom:10px;color:#f1f5f9">Deep Learning Architecture Distribution</h3>`;
-            const maxVal = Math.max(...Object.values(methods));
-            html += `<div style="margin-bottom:16px">`;
-            for(const [m, c] of Object.entries(methods)) {
-                const pct = Math.round(c/maxVal*100);
-                html += `<div style="display:flex;align-items:center;margin-bottom:4px;font-size:12px">
-                    <span style="width:160px;color:#cbd5e1;flex-shrink:0">${esc(m)}</span>
-                    <div style="flex:1;background:#1e293b;border-radius:3px;height:18px;margin:0 8px">
-                        <div style="width:${pct}%;background:linear-gradient(90deg,#818cf8,#6366f1);height:100%;border-radius:3px;min-width:2px"></div>
-                    </div>
-                    <span style="color:#818cf8;width:30px;text-align:right">${c}</span>
-                </div>`;
-            }
-            html += `</div>`;
-        }
-
-        // Tool mentions
-        const tools = a.tool_mentions || {};
-        if(Object.keys(tools).length) {
-            html += `<h3 style="font-size:15px;margin-bottom:10px;color:#f1f5f9">Most Referenced Tools & Models</h3>`;
-            html += `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px">`;
-            for(const [t, c] of Object.entries(tools)) {
-                const size = Math.min(Math.max(12, 10+c*2), 24);
-                html += `<span style="background:#1e293b;border:1px solid #334155;border-radius:6px;padding:4px 10px;font-size:${size}px;color:#93c5fd">${esc(t)} <sup style="color:#818cf8">${c}</sup></span>`;
-            }
-            html += `</div>`;
-        }
-
-        // Hot topics
-        const hot = a.hot_topics || [];
-        if(hot.length) {
-            html += `<h3 style="font-size:15px;margin-bottom:10px;color:#f1f5f9">Hot Research Directions (Recent)</h3>`;
-            html += `<div style="margin-bottom:16px">`;
-            hot.forEach((h,i) => {
-                html += `<div style="display:flex;align-items:center;padding:6px 10px;background:${i%2?'transparent':'#0b0f1a'};border-radius:4px;font-size:13px">
-                    <span style="color:#fbbf24;margin-right:8px">🔥</span>
-                    <span style="color:#e2e8f0;flex:1">${esc(h.topic)}</span>
-                    <span style="color:#818cf8;font-weight:600">${h.count}</span>
-                </div>`;
-            });
-            html += `</div>`;
-        }
-
-        // Category insights
-        const insights = a.category_insights || {};
-        if(Object.keys(insights).length) {
-            html += `<h3 style="font-size:15px;margin-bottom:10px;color:#f1f5f9">Category Insights</h3>`;
-            html += `<table style="width:100%;font-size:12px;border-collapse:collapse;margin-bottom:16px">`;
-            html += `<tr style="border-bottom:1px solid #334155"><th style="text-align:left;padding:6px;color:#94a3b8">Category</th><th style="text-align:left;padding:6px;color:#94a3b8">Status</th></tr>`;
-            for(const [cat, info] of Object.entries(insights)) {
-                const color = info.includes('rapidly') ? '#34d399' : info.includes('actively') ? '#fbbf24' : '#94a3b8';
-                html += `<tr style="border-bottom:1px solid #1e293b"><td style="padding:6px;color:#cbd5e1">${esc(cat)}</td><td style="padding:6px;color:${color}">${esc(info)}</td></tr>`;
-            }
-            html += `</table>`;
-        }
-
-        // Trend analysis
-        const trend = a.trend_analysis || {};
-        const trendYears = Object.keys(trend).sort().reverse().slice(0, 5);
-        if(trendYears.length) {
-            html += `<h3 style="font-size:15px;margin-bottom:10px;color:#f1f5f9">Year-by-Year Trend</h3>`;
-            html += `<table style="width:100%;font-size:12px;border-collapse:collapse">`;
-            html += `<tr style="border-bottom:1px solid #334155"><th style="padding:6px;color:#94a3b8">Year</th><th style="padding:6px;color:#94a3b8">Papers</th><th style="padding:6px;color:#94a3b8;text-align:left">Top Methods</th></tr>`;
-            trendYears.forEach(y => {
-                const t = trend[y];
-                const methods = Object.entries(t.top_methods||{}).map(([m,c])=>`${m}(${c})`).join(', ');
-                html += `<tr style="border-bottom:1px solid #1e293b"><td style="padding:6px;color:#818cf8;text-align:center">${y}</td><td style="padding:6px;color:#e2e8f0;text-align:center">${t.total}</td><td style="padding:6px;color:#94a3b8">${methods}</td></tr>`;
-            });
-            html += `</table>`;
-        }
-
-        document.getElementById('analysisContent').innerHTML = html;
-
-        // Also update sidebar
-        updateSidebarAnalysis(a);
-    }).catch(e=>{
-        document.getElementById('analysisContent').innerHTML = `<p style="color:#f87171">Analysis failed: ${e}</p>`;
-    });
+async function checkStatus() {
+  const d = await getJSON('/api/status').catch(() => null);
+  if (!d) return;
+  setStatus(d);
+  if (d.status === 'running' && !poll) poll = setInterval(checkStatus, 1500);
+  else if (d.status !== 'running' && poll) { clearInterval(poll); poll = null; loadAll(); }
 }
 
-function updateSidebarAnalysis(a) {
-    // DL Methods sidebar
-    const methods = a.dl_method_distribution || {};
-    const mlEl = document.getElementById('dlMethodList');
-    if(Object.keys(methods).length) {
-        mlEl.innerHTML = Object.entries(methods).map(([m,c])=>
-            `<div class="cat-item"><span class="name">${esc(m)}</span><span class="cnt">${c}</span></div>`
-        ).join('');
+function bars(obj, max = 15) {
+  const entries = Object.entries(obj || {}).slice(0, max);
+  const peak = Math.max(1, ...entries.map(e => e[1]));
+  return entries.map(([k, v]) => `<div class="bar"><span>${esc(k)}</span><div class="track"><div class="fill" style="width:${Math.max(2, v / peak * 100)}%"></div></div><span class="v">${v}</span></div>`).join('');
+}
+
+async function showAnalysis() {
+  $('modal').classList.add('open');
+  $('analysis').textContent = 'Analyzing…';
+  const a = await getJSON('/api/analysis').catch(e => ({error: String(e)}));
+  if (a.error || !a.total_papers) { $('analysis').textContent = a.error || 'No papers to analyze yet.'; return; }
+  let h = `<div class="kpis" style="grid-template-columns:repeat(4,1fr);margin-bottom:14px">
+    <div class="kpi"><b>${a.total_papers}</b><span>papers</span></div><div class="kpi"><b>${a.dl_paper_count}</b><span>AI/ML papers</span></div>
+    <div class="kpi"><b>${a.dl_ratio}%</b><span>AI/ML share</span></div><div class="kpi"><b>${Object.keys(a.dl_method_distribution || {}).length}</b><span>architecture families</span></div></div>`;
+  h += `<pre class="sum">${esc(a.research_summary)}</pre>`;
+  h += `<h3>Architectures used</h3>${bars(a.dl_method_distribution)}`;
+  const years = Object.keys(a.trend_analysis || {}).sort((x, y) => y - x);
+  if (years.length) {
+    h += '<h3>Year by year</h3><div class="scroll"><table class="t"><tr><th>Year</th><th>Papers</th><th>AI/ML</th><th>AI/ML share</th><th>Top architectures</th></tr>';
+    for (const y of years) { const t = a.trend_analysis[y]; h += `<tr><td>${y}</td><td>${t.total}</td><td>${t.ml}</td><td>${t.ml_share}%</td><td>${esc(Object.entries(t.top_methods).map(([m, c]) => `${m} (${c})`).join(', '))}</td></tr>`; }
+    h += '</table></div>';
+  }
+  const cats = a.landscape_categories || [], methods = a.landscape_methods || [];
+  if (cats.length && methods.length) {
+    const peak = Math.max(1, ...methods.flatMap(m => cats.map(c => (a.landscape_matrix[m] || {})[c] || 0)));
+    h += '<h3>Architecture × topic (AI/ML papers)</h3><div class="scroll"><table class="t"><tr><th>Topic</th>' + methods.map(m => `<th>${esc(m)}</th>`).join('') + '</tr>';
+    for (const c of cats) {
+      h += `<tr><td>${esc(c)}</td>` + methods.map(m => { const v = (a.landscape_matrix[m] || {})[c] || 0; return `<td class="h" style="background:rgba(129,140,248,${(v / peak * 0.85).toFixed(2)})">${v || ''}</td>`; }).join('') + '</tr>';
     }
-    // Hot topics sidebar
-    const hot = a.hot_topics || [];
-    const htEl = document.getElementById('hotTopics');
-    if(hot.length) {
-        htEl.innerHTML = hot.map(h=>
-            `<div style="padding:3px 0;border-bottom:1px solid #1e293b"><span style="color:#fbbf24;margin-right:4px">•</span>${esc(h.topic)} <span style="color:#818cf8">(${h.count})</span></div>`
-        ).join('');
-    }
+    h += '</table></div>';
+  }
+  if ((a.topic_growth || []).length) {
+    const color = {emerging: 'var(--good)', growing: 'var(--good)', steady: 'var(--muted)', slowing: 'var(--warn)'};
+    h += '<h3>Topic momentum (last 24 months vs previous 24)</h3><div class="scroll"><table class="t"><tr><th>Topic</th><th>Total</th><th>Last 24 mo</th><th>Previous 24 mo</th><th>Change</th><th>Status</th></tr>';
+    for (const g of a.topic_growth) h += `<tr><td>${esc(g.category)}</td><td>${g.total}</td><td>${g.last_24_months}</td><td>${g.previous_24_months}</td><td>${g.growth_pct == null ? '–' : (g.growth_pct > 0 ? '+' : '') + g.growth_pct + '%'}</td><td style="color:${color[g.status]}">${g.status}</td></tr>`;
+    h += '</table></div>';
+  }
+  if ((a.hot_topics || []).length) {
+    h += '<h3>Most active method × topic pairs (last 2 years)</h3>' + bars(Object.fromEntries(a.hot_topics.map(t => [t.topic, t.count])), 12);
+  }
+  if (Object.keys(a.tool_mentions || {}).length) {
+    h += '<h3>Named tools and models</h3><div class="chips">' + Object.entries(a.tool_mentions).map(([t, c]) => `<span class="chip">${esc(t)} · ${c}</span>`).join('') + '</div>';
+  }
+  $('analysis').innerHTML = h;
 }
+$('btnAnalysis').addEventListener('click', showAnalysis);
+$('closeModal').addEventListener('click', () => $('modal').classList.remove('open'));
+$('modal').addEventListener('click', e => { if (e.target.id === 'modal') $('modal').classList.remove('open'); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') $('modal').classList.remove('open'); });
 
-function esc(s){if(!s)return'';const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
-
-loadAll();
+loadAll().catch(e => { $('list').innerHTML = `<div class="empty">Failed to load papers: ${esc(e)}</div>`; });
+checkStatus();
 </script>
 </body>
 </html>

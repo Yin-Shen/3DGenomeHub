@@ -118,17 +118,8 @@ echo [2/3] Building executable (this may take a few minutes)...
     --add-data "templates;templates" ^
     --add-data "papers;papers" ^
     --add-data "requirements.txt;." ^
-    --hidden-import genome_literature ^
-    --hidden-import genome_literature.cli ^
-    --hidden-import genome_literature.web_app ^
-    --hidden-import genome_literature.fetcher ^
-    --hidden-import genome_literature.categorizer ^
-    --hidden-import genome_literature.summarizer ^
-    --hidden-import genome_literature.readme_generator ^
-    --hidden-import genome_literature.email_notifier ^
-    --hidden-import genome_literature.storage ^
-    --hidden-import genome_literature.pipeline ^
-    --hidden-import genome_literature.config ^
+    --paths src ^
+    --collect-submodules genome_literature ^
     run_exe.py
 
 if errorlevel 1 (
@@ -144,6 +135,9 @@ echo [3/3] Copying supporting files...
 if not exist "dist\papers" mkdir "dist\papers"
 if not exist "dist\templates" mkdir "dist\templates"
 copy templates\email_digest.html dist\templates\ >nul 2>&1
+copy papers\curated_dois.txt dist\papers\ >nul 2>&1
+if exist papers\papers.json copy papers\papers.json dist\papers\ >nul 2>&1
+if exist papers\state.json copy papers\state.json dist\papers\ >nul 2>&1
 copy .env.example dist\ >nul 2>&1
 
 echo.

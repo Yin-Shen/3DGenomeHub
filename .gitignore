@@ -7,8 +7,10 @@ venv/
 *.egg-info/
 dist/
 build/
+*.spec
 .DS_Store
+.pytest_cache/
 *.db
-papers/papers.json
 papers/new_papers.json
+papers_export.*
 logs/

@@ -1,0 +1,20 @@
+10.1126/science.1181369       Lieberman-Aiden et al. 2009, Hi-C
+10.1038/nature11082           Dixon et al. 2012, topological domains
+10.1016/j.cell.2014.11.021    Rao et al. 2014, in situ Hi-C and loops
+10.1186/s13059-015-0831-x     HiC-Pro
+10.1016/j.cels.2016.07.002    Juicer
+10.1093/bioinformatics/btz540 cooler
+10.1126/science.aat5641       Dip-C
+10.1038/s41467-018-03113-2    HiCPlus
+10.1371/journal.pcbi.1007287  DeepHiC
+10.1093/bioinformatics/btz251 HiCNN
+10.1093/bioinformatics/btz317 hicGAN
+10.1073/pnas.1901423116       scHiCluster
+10.1038/s41592-020-0958-x     Akita
+10.1038/s41592-020-0960-3     DeepC
+10.1038/s41467-020-17239-9    Peakachu
+10.1186/s13059-020-02167-0    Mustache
+10.1038/s41467-020-19562-7    Chromosight
+10.1038/s41587-021-01034-y    Higashi
+10.1038/s41588-022-01065-4    Orca
+10.1038/s41587-022-01612-8    C.Origami

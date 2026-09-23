@@ -1,619 +1,729 @@
-"""Fetch papers from PubMed (NCBI E-utilities), bioRxiv, and arXiv APIs.
+"""Fetch candidate papers from PubMed, Europe PMC, bioRxiv, arXiv, Semantic Scholar and CrossRef.
 
-Each fetcher returns a list of Paper dicts with unified schema:
-  {
-    "id": str,           # unique identifier (DOI or source-specific ID)
-    "title": str,
-    "authors": list[str],
-    "abstract": str,
-    "journal": str,
-    "year": int,
-    "date": str,         # YYYY-MM-DD
-    "doi": str,
-    "url": str,
-    "source": str,       # "pubmed" | "biorxiv" | "arxiv"
-    "categories": list[str],   # filled later by categorizer
-    "fetched_at": str,   # ISO timestamp
-  }
+Each ``fetch_*`` function returns normalized records (see ``records``).  They
+do not judge relevance; the pipeline scores and filters every record after
+fetching.  ``since``/``until`` (YYYY-MM-DD) restrict results to a publication
+window for incremental updates; without them the searches are
+relevance-ranked backfills.
 """
 
 from __future__ import annotations
 
 import logging
-import re
-import time
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
-from typing import Any
-from urllib.parse import quote_plus
+from datetime import datetime, timedelta, timezone
+from typing import Any, Callable, Iterable
 
 import httpx
 
 from . import config
+from .matching import TermSet, normalize_text
+from .net import HttpClient, get_client
+from .records import clean_text, deduplicate, new_record, normalize_arxiv_id, normalize_doi, today
 
 logger = logging.getLogger(__name__)
 
-# Shared HTTP client settings
-_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
-_HEADERS = {"User-Agent": "3DGenomeHub/2.0 (https://github.com/Yin-Shen/3DGenomeHub)"}
+Record = dict[str, Any]
+Progress = Callable[[str], None]
+
+EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+EUROPEPMC_SEARCH = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+EUROPEPMC_SEARCH_POST = "https://www.ebi.ac.uk/europepmc/webservices/rest/searchPOST"
+BIORXIV_DETAILS = "https://api.biorxiv.org/details/biorxiv"
+ARXIV_API = "https://export.arxiv.org/api/query"
+SEMANTIC_SCHOLAR_SEARCH = "https://api.semanticscholar.org/graph/v1/paper/search"
+CROSSREF_WORKS = "https://api.crossref.org/works"
+
+ARXIV_NS = {
+    "atom": "http://www.w3.org/2005/Atom",
+    "arxiv": "http://arxiv.org/schemas/atom",
+    "opensearch": "http://a9.com/-/spec/opensearch/1.1/",
+}
+MONTHS = {m: i for i, m in enumerate(
+    ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], start=1)}
+SEASONS = {"spring": 3, "summer": 6, "fall": 9, "autumn": 9, "winter": 12}
+
+_CORE_TERMS = TermSet(config.GENOME_CORE_TERMS)
 
 
 # ---------------------------------------------------------------------------
-# PubMed via NCBI E-utilities
+# Query builders
 # ---------------------------------------------------------------------------
 
-PUBMED_ESEARCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
-PUBMED_EFETCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+_NO_PLURAL_ENDINGS = ("s", "ing", "al", "ed", "ic", "ive", "ar", "y")
 
 
-def fetch_pubmed(query: str, max_results: int = config.MAX_RESULTS_PER_QUERY) -> list[dict[str, Any]]:
-    """Search PubMed and return structured paper records."""
-    papers: list[dict[str, Any]] = []
-    try:
-        # Step 1: esearch to get PMIDs
-        params = {
-            "db": "pubmed",
-            "term": query,
-            "retmax": str(max_results),
-            "sort": "date",
-            "retmode": "json",
-        }
-        with httpx.Client(timeout=_TIMEOUT, headers=_HEADERS) as client:
-            resp = client.get(PUBMED_ESEARCH, params=params)
-            resp.raise_for_status()
-            data = resp.json()
+def _pluralizable(term: str) -> bool:
+    last = term.split()[-1].split("-")[-1]
+    return (
+        len(last) >= 4 and last.isalpha() and not last.isupper()
+        and not last.lower().endswith(_NO_PLURAL_ENDINGS)
+    )
 
-        id_list = data.get("esearchresult", {}).get("idlist", [])
-        if not id_list:
-            return papers
 
-        # Step 2: efetch to get full records in XML
-        time.sleep(0.4)  # respect NCBI rate limit
-        with httpx.Client(timeout=_TIMEOUT, headers=_HEADERS) as client:
-            resp = client.get(
-                PUBMED_EFETCH,
-                params={
-                    "db": "pubmed",
-                    "id": ",".join(id_list),
-                    "retmode": "xml",
-                },
-            )
-            resp.raise_for_status()
+def term_variants(term: str) -> list[str]:
+    """Singular + plural forms for engines without stemming inside phrases."""
+    return [term, f"{term}s"] if _pluralizable(term) else [term]
 
-        root = ET.fromstring(resp.text)
-        for article_el in root.findall(".//PubmedArticle"):
-            paper = _parse_pubmed_article(article_el)
-            if paper:
-                papers.append(paper)
 
-    except Exception:
-        logger.exception("PubMed fetch failed for query: %s", query)
+def build_pubmed_query(groups: list[list[str]]) -> str:
+    def tiab(t: str) -> str:
+        return f'"{t}*"[tiab]' if _pluralizable(t) else f'"{t}"[tiab]'
+    return " AND ".join("(" + " OR ".join(tiab(t) for t in g) + ")" for g in groups)
 
+
+def build_europepmc_query(groups: list[list[str]]) -> str:
+    clauses = []
+    for g in groups:
+        variants = [v for t in g for v in term_variants(t)]
+        clauses.append("(" + " OR ".join(f'TITLE:"{v}" OR ABSTRACT:"{v}"' for v in variants) + ")")
+    return " AND ".join(clauses)
+
+
+def build_arxiv_query(groups: list[list[str]], max_terms: int = 10) -> str:
+    clauses = []
+    for g in groups:
+        variants = [v for t in g[:max_terms] for v in term_variants(t)]
+        clauses.append("(" + " OR ".join(f'ti:"{v}" OR abs:"{v}"' for v in variants) + ")")
+    return " AND ".join(clauses)
+
+
+# ---------------------------------------------------------------------------
+# PubMed (NCBI E-utilities)
+# ---------------------------------------------------------------------------
+
+def _ncbi_params() -> dict[str, str]:
+    params = {"tool": "3DGenomeHub"}
+    if config.NCBI_EMAIL:
+        params["email"] = config.NCBI_EMAIL
+    if config.NCBI_API_KEY:
+        params["api_key"] = config.NCBI_API_KEY
+    return params
+
+
+def fetch_pubmed(
+    query: str,
+    max_results: int = 200,
+    since: str | None = None,
+    until: str | None = None,
+    client: HttpClient | None = None,
+) -> list[Record]:
+    client = client or get_client()
+    params = {
+        "db": "pubmed", "term": query, "retmax": str(max_results), "retmode": "json",
+        "sort": "relevance", **_ncbi_params(),
+    }
+    if since:
+        params.update(datetype="edat", mindate=since.replace("-", "/"), maxdate=(until or today()).replace("-", "/"))
+    data = client.get(f"{EUTILS}/esearch.fcgi", params=params).json()
+    ids = data.get("esearchresult", {}).get("idlist", [])
+    papers: list[Record] = []
+    for start in range(0, len(ids), 200):
+        batch = ids[start:start + 200]
+        resp = client.post(
+            f"{EUTILS}/efetch.fcgi",
+            data={"db": "pubmed", "id": ",".join(batch), "retmode": "xml", **_ncbi_params()},
+        )
+        papers.extend(parse_pubmed_xml(resp.content))
     return papers
 
 
-def _parse_pubmed_article(article_el: ET.Element) -> dict[str, Any] | None:
-    """Parse a single PubmedArticle XML element."""
-    try:
-        medline = article_el.find(".//MedlineCitation")
-        if medline is None:
-            return None
+def parse_pubmed_xml(xml: bytes | str) -> list[Record]:
+    root = ET.fromstring(xml)
+    out = []
+    for el in root.findall(".//PubmedArticle"):
+        try:
+            rec = parse_pubmed_article(el)
+        except Exception:
+            logger.exception("Failed to parse a PubMed article")
+            rec = None
+        if rec:
+            out.append(rec)
+    return out
 
-        pmid_el = medline.find("PMID")
-        pmid = pmid_el.text if pmid_el is not None else ""
 
-        art = medline.find("Article")
-        if art is None:
-            return None
-
-        # Title
-        title_el = art.find("ArticleTitle")
-        title = _xml_text(title_el)
-        if not title:
-            return None
-
-        # Abstract
-        abstract_parts = []
-        abstract_el = art.find("Abstract")
-        if abstract_el is not None:
-            for at in abstract_el.findall("AbstractText"):
-                label = at.get("Label", "")
-                text = _xml_text(at)
-                if label and text:
-                    abstract_parts.append(f"{label}: {text}")
-                elif text:
-                    abstract_parts.append(text)
-        abstract = " ".join(abstract_parts)
-
-        # Authors
-        authors = []
-        for author_el in art.findall(".//Author"):
-            last = author_el.findtext("LastName", "")
-            fore = author_el.findtext("ForeName", "")
-            if last:
-                authors.append(f"{last} {fore}".strip())
-
-        # Journal
-        journal_el = art.find("Journal/Title")
-        journal = journal_el.text if journal_el is not None else ""
-
-        # Date
-        year, date_str = _extract_pubmed_date(art)
-
-        # DOI
-        doi = ""
-        for eid in article_el.findall(".//ArticleId"):
-            if eid.get("IdType") == "doi":
-                doi = eid.text or ""
-                break
-
-        url = f"https://doi.org/{doi}" if doi else f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
-
-        return {
-            "id": doi if doi else f"pmid:{pmid}",
-            "title": _clean_text(title),
-            "authors": authors,
-            "abstract": _clean_text(abstract),
-            "journal": journal,
-            "year": year,
-            "date": date_str,
-            "doi": doi,
-            "url": url,
-            "source": "pubmed",
-            "categories": [],
-            "fetched_at": datetime.now(timezone.utc).isoformat(),
-        }
-    except Exception:
-        logger.exception("Failed to parse PubMed article")
+def parse_pubmed_article(el: ET.Element) -> Record | None:
+    medline = el.find("MedlineCitation")
+    if medline is None:
+        return None
+    art = medline.find("Article")
+    if art is None:
+        return None
+    pmid = (medline.findtext("PMID") or "").strip()
+    title = _xml_text(art.find("ArticleTitle")) or _xml_text(art.find("VernacularTitle"))
+    if not title:
         return None
 
+    parts = []
+    for at in art.findall("Abstract/AbstractText"):
+        text = _xml_text(at)
+        label = at.get("Label")
+        if text:
+            parts.append(f"{label.capitalize()}: {text}" if label and label.upper() != "UNLABELLED" else text)
+    abstract = " ".join(parts)
 
-def _extract_pubmed_date(art_el: ET.Element) -> tuple[int, str]:
-    """Extract publication date from Article element."""
-    # Try ArticleDate first (electronic publication)
-    ad = art_el.find("ArticleDate")
-    if ad is not None:
-        y = ad.findtext("Year", "")
-        m = ad.findtext("Month", "01")
-        d = ad.findtext("Day", "01")
-        if y:
-            return int(y), f"{y}-{m.zfill(2)}-{d.zfill(2)}"
+    authors = []
+    for a in art.findall("AuthorList/Author"):
+        last = a.findtext("LastName") or ""
+        fore = a.findtext("ForeName") or a.findtext("Initials") or ""
+        collective = a.findtext("CollectiveName") or ""
+        name = f"{last} {fore}".strip() or collective.strip()
+        if name:
+            authors.append(name)
 
-    # Fall back to Journal PubDate
-    pd = art_el.find("Journal/JournalIssue/PubDate")
+    journal = art.findtext("Journal/Title") or medline.findtext("MedlineJournalInfo/MedlineTA") or ""
+    date = _pubmed_date(art, el)
+
+    doi = pmcid = ""
+    for aid in el.findall("PubmedData/ArticleIdList/ArticleId"):
+        kind = aid.get("IdType")
+        if kind == "doi" and not doi:
+            doi = aid.text or ""
+        elif kind == "pmc" and not pmcid:
+            pmcid = aid.text or ""
+    if not doi:
+        for loc in art.findall("ELocationID"):
+            if loc.get("EIdType") == "doi":
+                doi = loc.text or ""
+                break
+
+    pub_types = [pt.text or "" for pt in art.findall("PublicationTypeList/PublicationType")]
+    keywords = [_xml_text(k) for k in medline.findall("KeywordList/Keyword")]
+    return new_record(
+        "pubmed",
+        title=title, abstract=abstract, authors=authors, journal=journal,
+        date=date, year=date[:4] if date else None, doi=doi, pmid=pmid, pmcid=pmcid,
+        publication_types=pub_types, keywords=keywords,
+        is_preprint=any(t.lower() == "preprint" for t in pub_types),
+    )
+
+
+def _pubmed_date(art: ET.Element, el: ET.Element) -> str:
+    ad = art.find("ArticleDate")
+    if ad is not None and ad.findtext("Year"):
+        return _ymd(ad.findtext("Year"), ad.findtext("Month"), ad.findtext("Day"))
+    pd = art.find("Journal/JournalIssue/PubDate")
     if pd is not None:
-        y = pd.findtext("Year", "")
-        m = pd.findtext("Month", "01")
-        d = pd.findtext("Day", "01")
-        if y:
-            # Month might be "Jan", "Feb", etc.
-            month_map = {
-                "jan": "01", "feb": "02", "mar": "03", "apr": "04",
-                "may": "05", "jun": "06", "jul": "07", "aug": "08",
-                "sep": "09", "oct": "10", "nov": "11", "dec": "12",
-            }
-            m = month_map.get(m.lower()[:3], m.zfill(2))
-            return int(y), f"{y}-{m}-{d.zfill(2)}"
-
-    return datetime.now().year, datetime.now().strftime("%Y-%m-%d")
+        if pd.findtext("Year"):
+            return _ymd(pd.findtext("Year"), pd.findtext("Month") or pd.findtext("Season"), pd.findtext("Day"))
+        medline_date = pd.findtext("MedlineDate") or ""
+        tokens = medline_date.replace("-", " ").split()
+        if tokens and tokens[0][:4].isdigit():
+            return _ymd(tokens[0][:4], tokens[1] if len(tokens) > 1 else None, None)
+    hist = el.find("PubmedData/History/PubMedPubDate[@PubStatus='pubmed']")
+    if hist is not None and hist.findtext("Year"):
+        return _ymd(hist.findtext("Year"), hist.findtext("Month"), hist.findtext("Day"))
+    return ""
 
 
-# ---------------------------------------------------------------------------
-# bioRxiv / medRxiv API
-# ---------------------------------------------------------------------------
-
-BIORXIV_API = "https://api.biorxiv.org/details/biorxiv"
-
-
-def fetch_biorxiv(query: str, max_results: int = config.MAX_RESULTS_PER_QUERY) -> list[dict[str, Any]]:
-    """Search bioRxiv for recent preprints matching the query.
-
-    bioRxiv content API returns preprints by date range.  We fetch the last
-    365 days and filter by keyword matching on title + abstract.
-    """
-    papers: list[dict[str, Any]] = []
-    try:
-        today = datetime.now()
-        start_date = today.replace(year=today.year - 1).strftime("%Y-%m-%d")
-        end_date = today.strftime("%Y-%m-%d")
-
-        url = f"{BIORXIV_API}/{start_date}/{end_date}/0/{max_results}"
-        with httpx.Client(timeout=_TIMEOUT, headers=_HEADERS) as client:
-            resp = client.get(url)
-            resp.raise_for_status()
-            data = resp.json()
-
-        collection = data.get("collection", [])
-        query_terms = [t.strip().lower() for t in re.split(r"\s+", query.lower()) if len(t.strip()) > 2]
-
-        for item in collection:
-            title = item.get("title", "")
-            abstract = item.get("abstract", "")
-            text = f"{title} {abstract}".lower()
-
-            # Check if enough query terms appear
-            matches = sum(1 for t in query_terms if t in text)
-            if matches < min(2, len(query_terms)):
-                continue
-
-            doi = item.get("doi", "")
-            date_str = item.get("date", "")
-            year = int(date_str[:4]) if date_str and len(date_str) >= 4 else today.year
-
-            authors_raw = item.get("authors", "")
-            authors = [a.strip() for a in authors_raw.split(";") if a.strip()]
-
-            papers.append({
-                "id": f"10.1101/{doi}" if doi and not doi.startswith("10.") else doi,
-                "title": _clean_text(title),
-                "authors": authors,
-                "abstract": _clean_text(abstract),
-                "journal": "bioRxiv (preprint)",
-                "year": year,
-                "date": date_str,
-                "doi": f"10.1101/{doi}" if doi and not doi.startswith("10.") else doi,
-                "url": f"https://doi.org/10.1101/{doi}" if doi and not doi.startswith("10.") else f"https://doi.org/{doi}",
-                "source": "biorxiv",
-                "categories": [],
-                "fetched_at": datetime.now(timezone.utc).isoformat(),
-            })
-
-    except Exception:
-        logger.exception("bioRxiv fetch failed for query: %s", query)
-
-    return papers
+def _ymd(year: str | None, month: str | None, day: str | None) -> str:
+    if not year or not year.strip()[:4].isdigit():
+        return ""
+    m = 1
+    if month:
+        token = month.strip().lower()
+        if token.isdigit():
+            m = int(token)
+        else:
+            m = MONTHS.get(token[:3]) or SEASONS.get(token, 1)
+    d = int(day) if day and day.strip().isdigit() else 1
+    return f"{int(year.strip()[:4]):04d}-{min(max(m, 1), 12):02d}-{min(max(d, 1), 31):02d}"
 
 
 # ---------------------------------------------------------------------------
-# arXiv API
+# Europe PMC (journals + preprints incl. bioRxiv/medRxiv)
 # ---------------------------------------------------------------------------
 
-ARXIV_API = "http://export.arxiv.org/api/query"
-
-
-def fetch_arxiv(query: str, max_results: int = config.MAX_RESULTS_PER_QUERY) -> list[dict[str, Any]]:
-    """Search arXiv for papers matching the query."""
-    papers: list[dict[str, Any]] = []
-    try:
-        search_query = f"all:{quote_plus(query)}"
+def fetch_europepmc(
+    query: str,
+    max_results: int = 200,
+    since: str | None = None,
+    until: str | None = None,
+    client: HttpClient | None = None,
+    restrict_sources: bool = True,
+) -> list[Record]:
+    client = client or get_client()
+    q = f"({query})"
+    if restrict_sources:
+        q += " AND (SRC:MED OR SRC:PMC OR SRC:PPR)"
+    if since:
+        q += f" AND (FIRST_PDATE:[{since} TO {until or today()}])"
+    papers: list[Record] = []
+    cursor = "*"
+    while len(papers) < max_results:
         params = {
-            "search_query": search_query,
-            "start": "0",
-            "max_results": str(max_results),
-            "sortBy": "submittedDate",
-            "sortOrder": "descending",
+            "query": q, "format": "json", "resultType": "core",
+            "pageSize": str(min(1000, max_results - len(papers))), "cursorMark": cursor,
         }
-        with httpx.Client(timeout=_TIMEOUT, headers=_HEADERS) as client:
-            resp = client.get(ARXIV_API, params=params)
-            resp.raise_for_status()
-
-        root = ET.fromstring(resp.text)
-        ns = {"atom": "http://www.w3.org/2005/Atom"}
-
-        for entry in root.findall("atom:entry", ns):
-            arxiv_id = entry.findtext("atom:id", "", ns).strip()
-            # Extract just the ID part
-            short_id = arxiv_id.split("/abs/")[-1] if "/abs/" in arxiv_id else arxiv_id.split("/")[-1]
-
-            title = entry.findtext("atom:title", "", ns).strip()
-            title = re.sub(r"\s+", " ", title)
-
-            abstract = entry.findtext("atom:summary", "", ns).strip()
-            abstract = re.sub(r"\s+", " ", abstract)
-
-            authors = []
-            for author_el in entry.findall("atom:author", ns):
-                name = author_el.findtext("atom:name", "", ns).strip()
-                if name:
-                    authors.append(name)
-
-            published = entry.findtext("atom:published", "", ns)
-            date_str = published[:10] if published else ""
-            year = int(date_str[:4]) if date_str else datetime.now().year
-
-            # Look for DOI in links
-            doi = ""
-            for link in entry.findall("atom:link", ns):
-                href = link.get("href", "")
-                if "doi.org" in href:
-                    doi = href.replace("https://doi.org/", "").replace("http://doi.org/", "")
-                    break
-
-            papers.append({
-                "id": doi if doi else f"arxiv:{short_id}",
-                "title": _clean_text(title),
-                "authors": authors,
-                "abstract": _clean_text(abstract),
-                "journal": "arXiv (preprint)",
-                "year": year,
-                "date": date_str,
-                "doi": doi,
-                "url": arxiv_id if arxiv_id.startswith("http") else f"https://arxiv.org/abs/{short_id}",
-                "source": "arxiv",
-                "categories": [],
-                "fetched_at": datetime.now(timezone.utc).isoformat(),
-            })
-
-    except Exception:
-        logger.exception("arXiv fetch failed for query: %s", query)
-
-    return papers
+        data = _europepmc_request(client, params)
+        results = (data.get("resultList") or {}).get("result") or []
+        for item in results:
+            rec = parse_europepmc_item(item)
+            if rec:
+                papers.append(rec)
+        nxt = data.get("nextCursorMark")
+        if not results or not nxt or nxt == cursor:
+            break
+        cursor = nxt
+    return papers[:max_results]
 
 
-# ---------------------------------------------------------------------------
-# Semantic Scholar API
-# ---------------------------------------------------------------------------
-
-SEMANTIC_SCHOLAR_API = "https://api.semanticscholar.org/graph/v1/paper/search"
-
-
-def fetch_semantic_scholar(query: str, max_results: int = config.MAX_RESULTS_PER_QUERY) -> list[dict[str, Any]]:
-    """Search Semantic Scholar for papers matching the query."""
-    papers: list[dict[str, Any]] = []
-    try:
-        params = {
-            "query": query,
-            "limit": str(min(max_results, 100)),
-            "fields": "title,authors,abstract,year,externalIds,venue,publicationDate,url",
-        }
-        with httpx.Client(timeout=_TIMEOUT, headers=_HEADERS) as client:
-            resp = client.get(SEMANTIC_SCHOLAR_API, params=params)
-            resp.raise_for_status()
-            data = resp.json()
-
-        for item in data.get("data", []):
-            title = item.get("title", "")
-            if not title:
-                continue
-
-            external_ids = item.get("externalIds") or {}
-            doi = external_ids.get("DOI", "")
-            pmid = external_ids.get("PubMed", "")
-            arxiv_id = external_ids.get("ArXiv", "")
-
-            paper_id = doi if doi else (f"pmid:{pmid}" if pmid else (f"arxiv:{arxiv_id}" if arxiv_id else f"s2:{item.get('paperId', '')}"))
-
-            authors = []
-            for a in item.get("authors") or []:
-                name = a.get("name", "")
-                if name:
-                    authors.append(name)
-
-            pub_date = item.get("publicationDate", "")
-            year = item.get("year") or (int(pub_date[:4]) if pub_date and len(pub_date) >= 4 else datetime.now().year)
-
-            url = f"https://doi.org/{doi}" if doi else (item.get("url") or "")
-
-            papers.append({
-                "id": paper_id,
-                "title": _clean_text(title),
-                "authors": authors,
-                "abstract": _clean_text(item.get("abstract") or ""),
-                "journal": item.get("venue") or "",
-                "year": year,
-                "date": pub_date or f"{year}-01-01",
-                "doi": doi,
-                "url": url,
-                "source": "semantic_scholar",
-                "categories": [],
-                "fetched_at": datetime.now(timezone.utc).isoformat(),
-            })
-
-    except Exception:
-        logger.exception("Semantic Scholar fetch failed for query: %s", query)
-
-    return papers
+def _europepmc_request(client: HttpClient, params: dict[str, str]) -> dict[str, Any]:
+    """Long boolean queries go through searchPOST; fall back to GET if unavailable."""
+    if len(params["query"]) > 1500:
+        try:
+            return client.post(EUROPEPMC_SEARCH_POST, data=params).json()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code not in (404, 405, 415):
+                raise
+            logger.warning("Europe PMC searchPOST unavailable (HTTP %d); using GET", exc.response.status_code)
+    return client.get(EUROPEPMC_SEARCH, params=params).json()
 
 
-# ---------------------------------------------------------------------------
-# Europe PMC API
-# ---------------------------------------------------------------------------
+def parse_europepmc_item(item: dict[str, Any]) -> Record | None:
+    title = item.get("title") or ""
+    if not title:
+        return None
+    src = item.get("source") or ""
+    authors = []
+    for a in (item.get("authorList") or {}).get("author") or []:
+        name = a.get("fullName") or " ".join(x for x in (a.get("lastName"), a.get("initials")) if x)
+        if not name and a.get("collectiveName"):
+            name = a["collectiveName"]
+        if name:
+            authors.append(name)
+    if not authors and item.get("authorString"):
+        authors = [a.strip() for a in item["authorString"].rstrip(".").split(",") if a.strip()]
 
-EUROPEPMC_API = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+    journal_info = item.get("journalInfo") or {}
+    journal = (journal_info.get("journal") or {}).get("title") or item.get("journalTitle") or ""
+    is_preprint = src == "PPR"
+    if is_preprint and not journal:
+        publisher = (item.get("bookOrReportDetails") or {}).get("publisher") or ""
+        journal = f"{publisher} (preprint)" if publisher else "Preprint"
 
-
-def fetch_europepmc(query: str, max_results: int = config.MAX_RESULTS_PER_QUERY) -> list[dict[str, Any]]:
-    """Search Europe PMC for papers matching the query."""
-    papers: list[dict[str, Any]] = []
-    try:
-        params = {
-            "query": query,
-            "format": "json",
-            "pageSize": str(min(max_results, 100)),
-            "sort": "date",
-            "resultType": "core",
-        }
-        with httpx.Client(timeout=_TIMEOUT, headers=_HEADERS) as client:
-            resp = client.get(EUROPEPMC_API, params=params)
-            resp.raise_for_status()
-            data = resp.json()
-
-        for item in data.get("resultList", {}).get("result", []):
-            title = item.get("title", "")
-            if not title:
-                continue
-
-            doi = item.get("doi", "")
-            pmid = item.get("pmid", "")
-            paper_id = doi if doi else (f"pmid:{pmid}" if pmid else f"epmc:{item.get('id', '')}")
-
-            authors = []
-            for a in (item.get("authorList") or {}).get("author") or []:
-                name = a.get("fullName", "")
-                if name:
-                    authors.append(name)
-
-            pub_date = item.get("firstPublicationDate", "")
-            year_str = item.get("pubYear", "")
-            year = int(year_str) if year_str and year_str.isdigit() else datetime.now().year
-
-            abstract = item.get("abstractText", "")
-            journal = item.get("journalTitle", "")
-
-            url = f"https://doi.org/{doi}" if doi else f"https://europepmc.org/article/MED/{pmid}"
-
-            papers.append({
-                "id": paper_id,
-                "title": _clean_text(title),
-                "authors": authors,
-                "abstract": _clean_text(abstract),
-                "journal": journal,
-                "year": year,
-                "date": pub_date or f"{year}-01-01",
-                "doi": doi,
-                "url": url,
-                "source": "europepmc",
-                "categories": [],
-                "fetched_at": datetime.now(timezone.utc).isoformat(),
-            })
-
-    except Exception:
-        logger.exception("Europe PMC fetch failed for query: %s", query)
-
-    return papers
+    date = (item.get("firstPublicationDate") or item.get("electronicPublicationDate")
+            or journal_info.get("printPublicationDate") or "")
+    pdf_url = ""
+    for ft in (item.get("fullTextUrlList") or {}).get("fullTextUrl") or []:
+        if ft.get("documentStyle") == "pdf" and ft.get("availabilityCode") in ("OA", "F", "S"):
+            pdf_url = ft.get("url", "")
+            break
+    ext_id = item.get("id") or ""
+    return new_record(
+        "europepmc",
+        title=title, abstract=item.get("abstractText") or "", authors=authors, journal=journal,
+        date=date, year=item.get("pubYear"), doi=item.get("doi") or "", pmid=item.get("pmid") or "",
+        pmcid=item.get("pmcid") or "", epmc_id=f"{src}:{ext_id}" if ext_id else "",
+        url=f"https://europepmc.org/article/{src}/{ext_id}" if (ext_id and not item.get("doi")) else "",
+        pdf_url=pdf_url,
+        publication_types=(item.get("pubTypeList") or {}).get("pubType") or [],
+        keywords=(item.get("keywordList") or {}).get("keyword") or [],
+        citations=item.get("citedByCount") or 0,
+        is_preprint=is_preprint,
+    )
 
 
-# ---------------------------------------------------------------------------
-# CrossRef API
-# ---------------------------------------------------------------------------
-
-CROSSREF_API = "https://api.crossref.org/works"
-
-
-def fetch_crossref(query: str, max_results: int = config.MAX_RESULTS_PER_QUERY) -> list[dict[str, Any]]:
-    """Search CrossRef for papers matching the query."""
-    papers: list[dict[str, Any]] = []
-    try:
-        params = {
-            "query": query,
-            "rows": str(min(max_results, 50)),
-            "sort": "published",
-            "order": "desc",
-            "select": "DOI,title,author,abstract,container-title,published,URL",
-        }
-        headers = {**_HEADERS, "Accept": "application/json"}
-        with httpx.Client(timeout=_TIMEOUT, headers=headers) as client:
-            resp = client.get(CROSSREF_API, params=params)
-            resp.raise_for_status()
-            data = resp.json()
-
-        for item in data.get("message", {}).get("items", []):
-            titles = item.get("title", [])
-            title = titles[0] if titles else ""
-            if not title:
-                continue
-
-            doi = item.get("DOI", "")
-
-            authors = []
-            for a in item.get("author") or []:
-                given = a.get("given", "")
-                family = a.get("family", "")
-                if family:
-                    authors.append(f"{family} {given}".strip())
-
-            # Extract date
-            pub = item.get("published", {})
-            date_parts = pub.get("date-parts", [[]])
-            if date_parts and date_parts[0]:
-                parts = date_parts[0]
-                year = parts[0] if len(parts) > 0 else datetime.now().year
-                month = parts[1] if len(parts) > 1 else 1
-                day = parts[2] if len(parts) > 2 else 1
-                date_str = f"{year}-{str(month).zfill(2)}-{str(day).zfill(2)}"
-            else:
-                year = datetime.now().year
-                date_str = f"{year}-01-01"
-
-            journal_titles = item.get("container-title", [])
-            journal = journal_titles[0] if journal_titles else ""
-            abstract = _clean_text(item.get("abstract", "").replace("<jats:p>", "").replace("</jats:p>", "").replace("<jats:italic>", "").replace("</jats:italic>", ""))
-
-            papers.append({
-                "id": doi,
-                "title": _clean_text(title),
-                "authors": authors,
-                "abstract": abstract,
-                "journal": journal,
-                "year": year,
-                "date": date_str,
-                "doi": doi,
-                "url": f"https://doi.org/{doi}" if doi else item.get("URL", ""),
-                "source": "crossref",
-                "categories": [],
-                "fetched_at": datetime.now(timezone.utc).isoformat(),
-            })
-
-    except Exception:
-        logger.exception("CrossRef fetch failed for query: %s", query)
-
-    return papers
-
-
-# ---------------------------------------------------------------------------
-# Unified fetch interface
-# ---------------------------------------------------------------------------
-
-FETCHER_MAP = {
-    "pubmed": fetch_pubmed,
-    "biorxiv": fetch_biorxiv,
-    "arxiv": fetch_arxiv,
-    "semantic_scholar": fetch_semantic_scholar,
-    "europepmc": fetch_europepmc,
-    "crossref": fetch_crossref,
-}
-
-
-def fetch_all_papers() -> list[dict[str, Any]]:
-    """Run all configured search queries and return deduplicated papers."""
-    all_papers: list[dict[str, Any]] = []
-    seen_ids: set[str] = set()
-
-    for i, sq in enumerate(config.SEARCH_QUERIES):
-        source = sq["source"]
-        query = sq["query"]
-        fetcher = FETCHER_MAP.get(source)
-        if fetcher is None:
-            logger.warning("Unknown source: %s", source)
+def fetch_by_dois(dois: Iterable[str], client: HttpClient | None = None) -> list[Record]:
+    """Resolve DOIs (curated landmark papers) via Europe PMC, falling back to CrossRef."""
+    client = client or get_client()
+    wanted = [d for d in (normalize_doi(x) for x in dois) if d]
+    found: dict[str, Record] = {}
+    for start in range(0, len(wanted), 10):
+        batch = wanted[start:start + 10]
+        query = " OR ".join(f'DOI:"{d}"' for d in batch)
+        try:
+            for rec in fetch_europepmc(query, max_results=50, client=client, restrict_sources=False):
+                if rec["doi"] in batch and rec["doi"] not in found:
+                    found[rec["doi"]] = rec
+        except Exception:
+            logger.exception("Europe PMC DOI lookup failed")
+    for doi in wanted:
+        if doi in found:
             continue
+        try:
+            data = client.get(f"{CROSSREF_WORKS}/{doi}", params=_crossref_params()).json()
+            rec = parse_crossref_item(data.get("message") or {})
+            if rec:
+                found[doi] = rec
+        except Exception:
+            logger.warning("Could not resolve curated DOI %s", doi)
+    for rec in found.values():
+        rec["curated"] = True
+    return list(found.values())
 
-        logger.info("[%d/%d] Fetching from %s: %s", i + 1, len(config.SEARCH_QUERIES), source, query[:80])
-        papers = fetcher(query)
-        logger.info("  -> Got %d papers", len(papers))
 
-        for p in papers:
-            pid = _normalize_id(p["id"])
-            if pid and pid not in seen_ids:
-                seen_ids.add(pid)
-                p["id"] = pid
-                all_papers.append(p)
+# ---------------------------------------------------------------------------
+# bioRxiv (full scan of a recent date window, pre-filtered on 3D-genome terms)
+# ---------------------------------------------------------------------------
 
-        # Respect API rate limits
-        time.sleep(0.5)
+def fetch_biorxiv_recent(
+    since: str,
+    until: str | None = None,
+    max_records: int = config.BIORXIV_MAX_RECORDS,
+    client: HttpClient | None = None,
+) -> list[Record]:
+    client = client or get_client()
+    until = until or today()
+    latest: dict[str, tuple[int, Record]] = {}
+    cursor = 0
+    while cursor < max_records:
+        data = client.get(f"{BIORXIV_DETAILS}/{since}/{until}/{cursor}/json").json()
+        messages = data.get("messages") or [{}]
+        collection = data.get("collection") or []
+        if not collection:
+            break
+        for item in collection:
+            rec = parse_biorxiv_item(item)
+            if rec is None:
+                continue
+            try:
+                version = int(item.get("version") or 1)
+            except ValueError:
+                version = 1
+            if rec["doi"] not in latest or version > latest[rec["doi"]][0]:
+                latest[rec["doi"]] = (version, rec)
+        msg = messages[0] if messages else {}
+        try:
+            total = int(msg.get("total") or 0)
+            count = int(msg.get("count") or len(collection))
+        except (TypeError, ValueError):
+            total, count = 0, len(collection)
+        cursor += count or len(collection)
+        if total and cursor >= total:
+            break
+    return [rec for _, rec in latest.values()]
 
-    logger.info("Total unique papers fetched: %d", len(all_papers))
-    return all_papers
+
+def parse_biorxiv_item(item: dict[str, Any]) -> Record | None:
+    category = (item.get("category") or "").strip().lower()
+    if category and category not in config.BIORXIV_CATEGORIES:
+        return None
+    title = item.get("title") or ""
+    abstract = item.get("abstract") or ""
+    if not title or not _CORE_TERMS.any(normalize_text(f"{clean_text(title)} {clean_text(abstract)}")):
+        return None
+    doi = item.get("doi") or ""
+    if doi and not doi.startswith("10."):
+        doi = f"10.1101/{doi}"
+    authors = [a.strip() for a in (item.get("authors") or "").split(";") if a.strip()]
+    server = (item.get("server") or "bioRxiv").strip() or "bioRxiv"
+    return new_record(
+        "biorxiv",
+        title=title, abstract=abstract, authors=authors, journal=f"{server} (preprint)",
+        date=item.get("date") or "", doi=doi, keywords=[category] if category else [],
+        pdf_url=f"https://www.biorxiv.org/content/{doi}v{item.get('version') or 1}.full.pdf" if doi else "",
+        is_preprint=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# arXiv
+# ---------------------------------------------------------------------------
+
+def fetch_arxiv(
+    query: str,
+    max_results: int = 100,
+    since: str | None = None,
+    until: str | None = None,
+    client: HttpClient | None = None,
+) -> list[Record]:
+    client = client or get_client()
+    q = query
+    if since:
+        start_s = since.replace("-", "")
+        end_s = (until or today()).replace("-", "")
+        q = f"({q}) AND submittedDate:[{start_s}0000 TO {end_s}2359]"
+    papers: list[Record] = []
+    start = 0
+    page = min(100, max_results)
+    while start < max_results:
+        params = {
+            "search_query": q, "start": str(start), "max_results": str(page),
+            "sortBy": "relevance", "sortOrder": "descending",
+        }
+        resp = client.get(ARXIV_API, params=params)
+        entries = parse_arxiv_feed(resp.content)
+        papers.extend(entries)
+        if len(entries) < page:
+            break
+        start += page
+    return papers[:max_results]
+
+
+def parse_arxiv_feed(xml: bytes | str) -> list[Record]:
+    root = ET.fromstring(xml)
+    out = []
+    for entry in root.findall("atom:entry", ARXIV_NS):
+        id_url = (entry.findtext("atom:id", "", ARXIV_NS) or "").strip()
+        if "/api/errors" in id_url:
+            logger.warning("arXiv query error: %s", entry.findtext("atom:summary", "", ARXIV_NS))
+            continue
+        arxiv_id = id_url.split("/abs/")[-1] if "/abs/" in id_url else id_url.rsplit("/", 1)[-1]
+        title = entry.findtext("atom:title", "", ARXIV_NS)
+        if not title:
+            continue
+        authors = [
+            (a.findtext("atom:name", "", ARXIV_NS) or "").strip()
+            for a in entry.findall("atom:author", ARXIV_NS)
+        ]
+        published = entry.findtext("atom:published", "", ARXIV_NS) or ""
+        journal_ref = clean_text(entry.findtext("arxiv:journal_ref", "", ARXIV_NS))
+        doi = entry.findtext("arxiv:doi", "", ARXIV_NS) or ""
+        pdf_url = ""
+        for link in entry.findall("atom:link", ARXIV_NS):
+            if link.get("title") == "pdf":
+                pdf_url = link.get("href", "")
+            elif link.get("title") == "doi" and not doi:
+                doi = link.get("href", "")
+        categories = [c.get("term", "") for c in entry.findall("atom:category", ARXIV_NS)]
+        out.append(new_record(
+            "arxiv",
+            title=title, abstract=entry.findtext("atom:summary", "", ARXIV_NS), authors=authors,
+            journal=journal_ref or "arXiv (preprint)", date=published[:10], arxiv_id=arxiv_id,
+            doi=doi, url=f"https://arxiv.org/abs/{normalize_arxiv_id(arxiv_id)}",
+            pdf_url=pdf_url.replace("http://", "https://"), keywords=[c for c in categories if c],
+            is_preprint=not journal_ref,
+        ))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Semantic Scholar
+# ---------------------------------------------------------------------------
+
+S2_FIELDS = ("title,abstract,authors,year,venue,publicationDate,externalIds,citationCount,"
+             "publicationTypes,journal,openAccessPdf,url")
+
+
+def fetch_semantic_scholar(
+    query: str,
+    max_results: int = 100,
+    since: str | None = None,
+    until: str | None = None,
+    client: HttpClient | None = None,
+) -> list[Record]:
+    client = client or get_client()
+    headers = {"x-api-key": config.SEMANTIC_SCHOLAR_API_KEY} if config.SEMANTIC_SCHOLAR_API_KEY else {}
+    papers: list[Record] = []
+    offset = 0
+    while offset < max_results:
+        limit = min(100, max_results - offset)
+        params = {"query": query, "limit": str(limit), "offset": str(offset), "fields": S2_FIELDS}
+        if since:
+            params["publicationDateOrYear"] = f"{since}:{until or today()}"
+        try:
+            data = client.get(SEMANTIC_SCHOLAR_SEARCH, params=params, headers=headers).json()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 400 or "publicationDateOrYear" not in params:
+                raise
+            params.pop("publicationDateOrYear")
+            data = client.get(SEMANTIC_SCHOLAR_SEARCH, params=params, headers=headers).json()
+        items = data.get("data") or []
+        for item in items:
+            rec = parse_semantic_scholar_item(item)
+            if rec and _in_window(rec, since, until):
+                papers.append(rec)
+        if not items or data.get("next") is None:
+            break
+        offset = int(data["next"])
+    return papers
+
+
+def parse_semantic_scholar_item(item: dict[str, Any]) -> Record | None:
+    title = item.get("title") or ""
+    if not title:
+        return None
+    ext = item.get("externalIds") or {}
+    venue = ((item.get("journal") or {}).get("name") or item.get("venue") or "").strip()
+    arxiv_id = ext.get("ArXiv") or ""
+    if venue.lower() in ("arxiv", "arxiv.org") or (not venue and arxiv_id):
+        venue = "arXiv (preprint)"
+    elif venue.lower() in ("biorxiv", "medrxiv"):
+        venue = f"{venue} (preprint)"
+    return new_record(
+        "semantic_scholar",
+        title=title, abstract=item.get("abstract") or "",
+        authors=[a.get("name", "") for a in item.get("authors") or []],
+        journal=venue, date=item.get("publicationDate") or "", year=item.get("year"),
+        doi=ext.get("DOI") or "", pmid=str(ext.get("PubMed") or ""), arxiv_id=arxiv_id,
+        pmcid=f"PMC{ext['PubMedCentral']}" if ext.get("PubMedCentral") else "",
+        s2_id=item.get("paperId") or "",
+        url="" if (ext.get("DOI") or arxiv_id or ext.get("PubMed")) else (item.get("url") or ""),
+        pdf_url=(item.get("openAccessPdf") or {}).get("url") or "",
+        publication_types=item.get("publicationTypes") or [],
+        citations=item.get("citationCount") or 0,
+    )
+
+
+# ---------------------------------------------------------------------------
+# CrossRef
+# ---------------------------------------------------------------------------
+
+CROSSREF_SELECT = ("DOI,title,author,abstract,container-title,issued,published-online,"
+                   "published-print,posted,URL,type,is-referenced-by-count")
+
+
+def _crossref_params() -> dict[str, str]:
+    return {"mailto": config.CROSSREF_MAILTO} if config.CROSSREF_MAILTO else {}
+
+
+def fetch_crossref(
+    query: str,
+    max_results: int = 40,
+    since: str | None = None,
+    until: str | None = None,
+    client: HttpClient | None = None,
+) -> list[Record]:
+    client = client or get_client()
+    filters = ["type:journal-article", "type:posted-content"]
+    if since:
+        filters += [f"from-pub-date:{since}", f"until-pub-date:{until or today()}"]
+    params = {
+        "query": query, "rows": str(min(max_results, 100)), "select": CROSSREF_SELECT,
+        "filter": ",".join(filters), **_crossref_params(),
+    }
+    try:
+        data = client.get(CROSSREF_WORKS, params=params).json()
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code != 400:
+            raise
+        params.pop("select")
+        data = client.get(CROSSREF_WORKS, params=params).json()
+    papers = []
+    for item in (data.get("message") or {}).get("items") or []:
+        rec = parse_crossref_item(item)
+        if rec:
+            papers.append(rec)
+    return papers
+
+
+def parse_crossref_item(item: dict[str, Any]) -> Record | None:
+    titles = item.get("title") or []
+    title = titles[0] if titles else ""
+    if not title or not item.get("DOI"):
+        return None
+    authors = []
+    for a in item.get("author") or []:
+        name = " ".join(x for x in (a.get("family"), a.get("given")) if x) or a.get("name", "")
+        if name:
+            authors.append(name)
+    date = ""
+    for key in ("published-online", "published-print", "posted", "issued", "published"):
+        parts = ((item.get(key) or {}).get("date-parts") or [[]])[0]
+        if parts and parts[0]:
+            date = "-".join(f"{int(x):02d}" if i else str(x) for i, x in enumerate(parts))
+            break
+    containers = item.get("container-title") or []
+    is_preprint = item.get("type") == "posted-content"
+    journal = containers[0] if containers else ("Preprint" if is_preprint else "")
+    return new_record(
+        "crossref",
+        title=title, abstract=item.get("abstract") or "", authors=authors, journal=journal,
+        date=date, doi=item["DOI"], citations=item.get("is-referenced-by-count") or 0,
+        is_preprint=is_preprint,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Orchestration
+# ---------------------------------------------------------------------------
+
+def build_jobs(
+    sources: Iterable[str],
+    since: str | None,
+    until: str,
+    backfill: bool,
+    client: HttpClient,
+) -> list[tuple[str, str, Callable[[], list[Record]]]]:
+    caps = config.BACKFILL_MAX_RESULTS_PER_QUERY if backfill else config.MAX_RESULTS_PER_QUERY
+    enabled = set(sources)
+    jobs: list[tuple[str, str, Callable[[], list[Record]]]] = []
+
+    def add(source: str, label: str, fn: Callable[[], list[Record]]) -> None:
+        if source in enabled:
+            jobs.append((source, label, fn))
+
+    for topic in config.SEARCH_TOPICS:
+        groups = topic["groups"]
+        name = topic["name"]
+        pq, eq, aq = build_pubmed_query(groups), build_europepmc_query(groups), build_arxiv_query(groups)
+        add("pubmed", name, lambda q=pq: fetch_pubmed(q, caps["pubmed"], since, until, client))
+        add("europepmc", name, lambda q=eq: fetch_europepmc(q, caps["europepmc"], since, until, client))
+        add("arxiv", name, lambda q=aq: fetch_arxiv(q, caps["arxiv"], since, until, client))
+        for i, plain in enumerate(topic.get("plain", [])):
+            add("semantic_scholar", plain,
+                lambda q=plain: fetch_semantic_scholar(q, caps["semantic_scholar"], since, until, client))
+            if i == 0:
+                add("crossref", plain, lambda q=plain: fetch_crossref(q, caps["crossref"], since, until, client))
+
+    biorxiv_since = since or (
+        datetime.now(timezone.utc) - timedelta(days=config.BIORXIV_BACKFILL_DAYS)).strftime("%Y-%m-%d")
+    add("biorxiv", f"full scan {biorxiv_since}..{until}",
+        lambda: fetch_biorxiv_recent(biorxiv_since, until, client=client))
+    return jobs
+
+
+def fetch_all_papers(
+    since: str | None = None,
+    until: str | None = None,
+    sources: Iterable[str] | None = None,
+    backfill: bool | None = None,
+    curated_dois: Iterable[str] = (),
+    progress: Progress | None = None,
+    report: dict[str, Any] | None = None,
+    client: HttpClient | None = None,
+) -> list[Record]:
+    """Run every configured search and return deduplicated candidate records.
+
+    ``report`` (if given) is filled with per-source counts and errors.
+    """
+    client = client or get_client()
+    until = until or today()
+    backfill = since is None if backfill is None else backfill
+    sources = list(sources or config.ENABLED_SOURCES)
+    jobs = build_jobs(sources, since, until, backfill, client)
+    curated = [d for d in curated_dois if d]
+    if curated:
+        jobs.insert(0, ("curated", f"{len(curated)} landmark DOIs", lambda: fetch_by_dois(curated, client)))
+
+    report = report if report is not None else {}
+    report.setdefault("by_source", {})
+    report.setdefault("errors", [])
+    collected: list[Record] = []
+    for i, (source, label, fn) in enumerate(jobs, 1):
+        msg = f"[{i}/{len(jobs)}] {source}: {label[:90]}"
+        logger.info(msg)
+        if progress:
+            progress(msg)
+        try:
+            papers = fn()
+        except Exception as exc:
+            logger.error("  -> %s failed: %s", source, exc)
+            report["errors"].append({"source": source, "query": label, "error": str(exc)[:300]})
+            continue
+        logger.info("  -> %d records", len(papers))
+        report["by_source"][source] = report["by_source"].get(source, 0) + len(papers)
+        collected.extend(papers)
+
+    unique = deduplicate(collected)
+    report["fetched_records"] = len(collected)
+    report["unique_records"] = len(unique)
+    logger.info("Fetched %d records, %d unique after deduplication", len(collected), len(unique))
+    return unique
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _in_window(rec: Record, since: str | None, until: str | None) -> bool:
+    if not since or not rec.get("date"):
+        return True
+    return since <= rec["date"] <= (until or today())
+
+
 def _xml_text(el: ET.Element | None) -> str:
-    """Get all text content from an XML element, including mixed content."""
     if el is None:
         return ""
-    return "".join(el.itertext()).strip()
-
-
-def _clean_text(text: str) -> str:
-    """Normalize whitespace in text."""
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def _normalize_id(paper_id: str) -> str:
-    """Normalize paper ID for deduplication."""
-    pid = paper_id.strip().lower()
-    # Remove common DOI prefixes
-    pid = pid.replace("https://doi.org/", "").replace("http://doi.org/", "")
-    return pid
+    return normalize_text("".join(el.itertext()))

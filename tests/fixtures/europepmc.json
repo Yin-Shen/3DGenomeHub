@@ -1,0 +1,36 @@
+{
+  "version": "6.9",
+  "hitCount": 2,
+  "nextCursorMark": "AoIIQJ",
+  "request": {"queryString": "test", "resultType": "core", "cursorMark": "*", "pageSize": 25},
+  "resultList": {
+    "result": [
+      {
+        "id": "39000001", "source": "MED", "pmid": "39000001", "pmcid": "PMC1234567",
+        "doi": "10.1000/test.3dgenome.2024",
+        "title": "Predicting 3D genome folding from DNA sequence with a convolutional neural network.",
+        "authorString": "Doe J, Roe R.",
+        "authorList": {"author": [{"fullName": "Doe J", "firstName": "Jane", "lastName": "Doe", "initials": "J"}, {"fullName": "Roe R", "lastName": "Roe", "initials": "R"}]},
+        "journalInfo": {"journal": {"title": "Nature Methods", "isoabbreviation": "Nat Methods"}, "printPublicationDate": "2024-03-01"},
+        "pubYear": "2024",
+        "abstractText": "<h4>Background</h4>Hi-C contact maps reveal topologically associating domains and chromatin loops. <h4>Results</h4>We present a deep learning model that predicts contact maps from DNA sequence alone and enables in silico mutagenesis of CTCF sites; it outperforms prior methods on held-out chromosomes.",
+        "pubTypeList": {"pubType": ["research-article", "Journal Article"]},
+        "keywordList": {"keyword": ["Hi-C", "Deep learning"]},
+        "citedByCount": 42,
+        "firstPublicationDate": "2024-02-15",
+        "fullTextUrlList": {"fullTextUrl": [{"availability": "Open access", "availabilityCode": "OA", "documentStyle": "pdf", "site": "Europe_PMC", "url": "https://europepmc.org/articles/PMC1234567?pdf=render"}]}
+      },
+      {
+        "id": "PPR800001", "source": "PPR", "doi": "10.1101/2025.01.10.632001",
+        "title": "Graph neural networks predict enhancer&#8211;promoter interactions from <i>Micro-C</i> maps",
+        "authorString": "Chen L, Garcia M, Okafor N.",
+        "bookOrReportDetails": {"publisher": "bioRxiv", "yearOfPublication": 2025},
+        "pubYear": "2025",
+        "abstractText": "Enhancer–promoter interactions shape gene regulation. We develop a graph neural network that uses Micro-C chromatin contacts and epigenomic features to predict enhancer-promoter loops at kilobase resolution.",
+        "pubTypeList": {"pubType": ["Preprint"]},
+        "firstPublicationDate": "2025-01-12",
+        "citedByCount": 0
+      }
+    ]
+  }
+}
