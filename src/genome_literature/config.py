@@ -1,4 +1,11 @@
-"""Configuration for 3D Genome & Deep Learning Literature Hub."""
+"""Configuration for 3D Genome & Deep Learning Literature Hub.
+
+Everything that controls *what* is fetched and *how* papers are judged lives
+here: search topics, relevance vocabularies, research categories, per-source
+limits and credentials.  Term dictionaries map a term to a weight; see
+``matching.compile_term`` for the matching rules (word boundaries, acronyms
+are case-sensitive, ``re:`` prefix for raw regular expressions).
+"""
 
 from __future__ import annotations
 
@@ -16,238 +23,549 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 PAPERS_DIR = PROJECT_ROOT / "papers"
 PAPERS_JSON = PAPERS_DIR / "papers.json"
 NEW_PAPERS_JSON = PAPERS_DIR / "new_papers.json"
+STATE_JSON = PAPERS_DIR / "state.json"
+CURATED_DOIS_FILE = PAPERS_DIR / "curated_dois.txt"
 TEMPLATE_DIR = PROJECT_ROOT / "templates"
 README_PATH = PROJECT_ROOT / "README.md"
+CATEGORY_PAGES_DIR = PROJECT_ROOT / "docs" / "papers"
+
+REPO_URL = "https://github.com/Yin-Shen/3DGenomeHub"
 
 # ---------------------------------------------------------------------------
-# Search queries — comprehensive 3D genome + deep learning / computational
+# Credentials / politeness settings (all optional)
 # ---------------------------------------------------------------------------
-SEARCH_QUERIES: list[dict[str, str]] = [
-    # ===== PubMed: Core 3D genome + deep learning =====
-    {"source": "pubmed", "query": "(3D genome OR three-dimensional genome OR chromatin architecture) AND (deep learning OR neural network)"},
-    {"source": "pubmed", "query": "(Hi-C OR HiC) AND (deep learning OR convolutional neural network OR transformer)"},
-    {"source": "pubmed", "query": "(chromatin loop OR TAD OR topologically associating domain) AND (deep learning OR machine learning OR graph neural network)"},
-    {"source": "pubmed", "query": "(chromatin conformation OR chromosome conformation) AND (deep learning OR generative model OR diffusion model)"},
-    {"source": "pubmed", "query": "(3D genome structure prediction) AND (deep learning OR neural network)"},
-    {"source": "pubmed", "query": "(single-cell Hi-C OR scHi-C) AND (deep learning OR machine learning)"},
+NCBI_API_KEY = os.getenv("NCBI_API_KEY", "")
+NCBI_EMAIL = os.getenv("NCBI_EMAIL", "")
+SEMANTIC_SCHOLAR_API_KEY = os.getenv("SEMANTIC_SCHOLAR_API_KEY", "")
+CROSSREF_MAILTO = os.getenv("CROSSREF_MAILTO", NCBI_EMAIL)
 
-    # ===== PubMed: 3D genome experimental methods =====
-    {"source": "pubmed", "query": "(Hi-C OR Micro-C OR HiChIP OR PLAC-seq) AND (computational OR algorithm OR method)"},
-    {"source": "pubmed", "query": "(Capture-C OR Capture Hi-C OR promoter capture) AND (genome organization OR chromatin)"},
-    {"source": "pubmed", "query": "(4C-seq OR 5C OR chromosome conformation capture) AND (computational OR analysis pipeline)"},
-    {"source": "pubmed", "query": "(SPRITE OR GAM OR genome architecture mapping) AND (3D genome OR chromatin)"},
-    {"source": "pubmed", "query": "(ChIA-PET OR ChIA-Drop) AND (chromatin interaction OR 3D genome)"},
-    {"source": "pubmed", "query": "(DNA-FISH OR chromatin tracing OR ORCA imaging) AND (3D genome OR chromosome)"},
-    {"source": "pubmed", "query": "(DamID OR TRIP OR TSA-seq OR nuclear speckle) AND (genome organization)"},
-    {"source": "pubmed", "query": "(Pore-C OR concatemer) AND (chromatin OR genome structure)"},
-    {"source": "pubmed", "query": "(CUT&RUN OR CUT&Tag) AND (3D genome OR chromatin architecture)"},
-
-    # ===== PubMed: Nuclear organization & structure =====
-    {"source": "pubmed", "query": "(nuclear organization OR nuclear architecture) AND (deep learning OR computational)"},
-    {"source": "pubmed", "query": "(lamina-associated domain OR LAD) AND (genome organization OR computational)"},
-    {"source": "pubmed", "query": "(nuclear speckle OR nuclear body OR nucleolus) AND (genome organization)"},
-    {"source": "pubmed", "query": "(phase separation OR liquid-liquid phase) AND (chromatin OR 3D genome)"},
-    {"source": "pubmed", "query": "(CTCF OR cohesin OR loop extrusion) AND (computational OR modeling OR deep learning)"},
-    {"source": "pubmed", "query": "(polymer model OR polymer simulation) AND (chromatin OR chromosome OR 3D genome)"},
-
-    # ===== PubMed: Broader computational genomics =====
-    {"source": "pubmed", "query": "(enhancer-promoter interaction) AND (prediction OR deep learning OR machine learning)"},
-    {"source": "pubmed", "query": "(chromatin accessibility OR ATAC-seq) AND (3D genome OR Hi-C) AND computational"},
-    {"source": "pubmed", "query": "(genome folding OR chromosome folding) AND (prediction OR deep learning)"},
-    {"source": "pubmed", "query": "(contact map OR contact matrix) AND (deep learning OR neural network)"},
-    {"source": "pubmed", "query": "(topological domain OR chromatin domain) AND (prediction OR classification OR deep learning)"},
-    {"source": "pubmed", "query": "(Hi-C normalization OR Hi-C bias) AND (method OR algorithm OR computational)"},
-    {"source": "pubmed", "query": "(3D genome browser OR genome visualization) AND (Hi-C OR chromatin)"},
-
-    # ===== PubMed: Disease & evolution =====
-    {"source": "pubmed", "query": "(3D genome OR chromatin architecture) AND (disease OR cancer OR disorder) AND computational"},
-    {"source": "pubmed", "query": "(structural variant OR translocation) AND (3D genome OR Hi-C OR TAD)"},
-    {"source": "pubmed", "query": "(3D genome OR chromatin conformation) AND (evolution OR conservation OR comparative)"},
-
-    # ===== bioRxiv queries =====
-    {"source": "biorxiv", "query": "3D genome deep learning"},
-    {"source": "biorxiv", "query": "Hi-C deep learning"},
-    {"source": "biorxiv", "query": "chromatin conformation neural network"},
-    {"source": "biorxiv", "query": "TAD prediction deep learning"},
-    {"source": "biorxiv", "query": "Hi-C computational method"},
-    {"source": "biorxiv", "query": "chromatin loop prediction"},
-    {"source": "biorxiv", "query": "genome structure prediction"},
-    {"source": "biorxiv", "query": "single-cell Hi-C analysis"},
-    {"source": "biorxiv", "query": "Micro-C chromatin"},
-    {"source": "biorxiv", "query": "nuclear organization computational"},
-
-    # ===== arXiv queries =====
-    {"source": "arxiv", "query": "3D genome deep learning"},
-    {"source": "arxiv", "query": "Hi-C neural network"},
-    {"source": "arxiv", "query": "chromatin structure prediction deep learning"},
-    {"source": "arxiv", "query": "genome folding convolutional network"},
-    {"source": "arxiv", "query": "chromatin contact map prediction"},
-    {"source": "arxiv", "query": "graph neural network genomics chromatin"},
-
-    # ===== Semantic Scholar queries =====
-    {"source": "semantic_scholar", "query": "3D genome deep learning"},
-    {"source": "semantic_scholar", "query": "Hi-C super resolution deep learning"},
-    {"source": "semantic_scholar", "query": "chromatin loop prediction neural network"},
-    {"source": "semantic_scholar", "query": "TAD boundary prediction machine learning"},
-    {"source": "semantic_scholar", "query": "single cell Hi-C computational"},
-    {"source": "semantic_scholar", "query": "Akita Enformer genome folding"},
-    {"source": "semantic_scholar", "query": "chromatin conformation capture computational methods"},
-    {"source": "semantic_scholar", "query": "3D genome structure prediction polymer model"},
-    {"source": "semantic_scholar", "query": "nuclear organization imaging computational"},
-    {"source": "semantic_scholar", "query": "CTCF cohesin loop extrusion modeling"},
-
-    # ===== Europe PMC queries =====
-    {"source": "europepmc", "query": "(3D genome OR three-dimensional genome) AND (deep learning OR neural network)"},
-    {"source": "europepmc", "query": "(Hi-C OR HiChIP OR Micro-C) AND (deep learning OR computational method)"},
-    {"source": "europepmc", "query": "(chromatin architecture OR nuclear organization) AND (machine learning OR algorithm)"},
-    {"source": "europepmc", "query": "(TAD OR chromatin loop OR compartment) AND (prediction OR detection) AND computational"},
-    {"source": "europepmc", "query": "(chromosome conformation capture) AND (tool OR software OR pipeline)"},
-
-    # ===== CrossRef queries =====
-    {"source": "crossref", "query": "3D genome deep learning"},
-    {"source": "crossref", "query": "Hi-C computational method"},
-    {"source": "crossref", "query": "chromatin architecture machine learning"},
-    {"source": "crossref", "query": "chromosome conformation capture tools"},
+ALL_SOURCES = ["pubmed", "europepmc", "biorxiv", "arxiv", "semantic_scholar", "crossref"]
+ENABLED_SOURCES = [
+    s.strip() for s in os.getenv("GENOME_HUB_SOURCES", ",".join(ALL_SOURCES)).split(",") if s.strip()
 ]
 
-# Maximum results per query
-MAX_RESULTS_PER_QUERY = 50
+# ---------------------------------------------------------------------------
+# Fetch limits
+# ---------------------------------------------------------------------------
+MAX_RESULTS_PER_QUERY: dict[str, int] = {
+    "pubmed": 200,
+    "europepmc": 200,
+    "arxiv": 100,
+    "semantic_scholar": 100,
+    "crossref": 40,
+}
+BACKFILL_MAX_RESULTS_PER_QUERY: dict[str, int] = {
+    "pubmed": 400,
+    "europepmc": 400,
+    "arxiv": 200,
+    "semantic_scholar": 100,
+    "crossref": 60,
+}
+INCREMENTAL_OVERLAP_DAYS = 7
+DEFAULT_LOOKBACK_DAYS = 30
+BIORXIV_BACKFILL_DAYS = 90
+BIORXIV_MAX_RECORDS = 20000
+BIORXIV_CATEGORIES = {
+    "bioinformatics", "genomics", "genetics", "molecular biology", "cell biology",
+    "biophysics", "systems biology", "synthetic biology", "developmental biology",
+    "cancer biology", "evolutionary biology", "biochemistry",
+}
+
+HTTP_TIMEOUT = 45.0
+HTTP_MAX_RETRIES = 4
+HOST_MIN_INTERVAL: dict[str, float] = {
+    "eutils.ncbi.nlm.nih.gov": 0.12 if NCBI_API_KEY else 0.4,
+    "www.ebi.ac.uk": 0.2,
+    "export.arxiv.org": 3.1,
+    "api.biorxiv.org": 0.5,
+    "api.semanticscholar.org": 1.1 if SEMANTIC_SCHOLAR_API_KEY else 3.0,
+    "api.crossref.org": 0.3,
+}
 
 # ---------------------------------------------------------------------------
-# Paper categories — comprehensive 3D genome research topics
+# Search topics.  Each topic is a list of term groups: terms inside a group
+# are OR-ed, groups are AND-ed.  The fetcher translates the groups into each
+# database's own syntax (PubMed [tiab], Europe PMC TITLE/ABSTRACT, arXiv
+# ti/abs).  ``plain`` holds free-text queries for relevance-ranked engines
+# (Semantic Scholar, CrossRef) that have no boolean field search.
 # ---------------------------------------------------------------------------
+G_CORE = [
+    "3D genome", "three-dimensional genome", "3D chromatin", "chromatin conformation",
+    "chromosome conformation capture", "Hi-C", "Micro-C", "HiChIP", "chromatin loop",
+    "topologically associating domain", "chromatin architecture", "genome folding",
+    "chromatin interaction", "chromatin contact", "enhancer-promoter interaction",
+]
+M_DL = [
+    "deep learning", "neural network", "machine learning", "transformer", "convolutional",
+    "graph neural network", "generative model", "diffusion model", "language model",
+    "foundation model", "autoencoder", "artificial intelligence", "attention mechanism",
+]
+M_COMP = [
+    "computational", "algorithm", "software", "tool", "toolkit", "pipeline", "framework",
+    "statistical", "bioinformatics", "package", "web server",
+]
+
+SEARCH_TOPICS: list[dict] = [
+    {
+        "name": "3D genome x deep learning",
+        "groups": [G_CORE, M_DL],
+        "plain": [
+            "3D genome deep learning", "Hi-C deep learning", "chromatin conformation neural network",
+            "Hi-C transformer model", "chromatin interaction prediction deep learning",
+        ],
+    },
+    {
+        "name": "Hi-C enhancement & imputation",
+        "groups": [
+            ["Hi-C", "Micro-C", "contact map", "contact matrix", "single-cell Hi-C", "scHi-C"],
+            ["super-resolution", "resolution enhancement", "imputation", "denoising", "enhancing",
+             "upsampling", "low-resolution"],
+        ],
+        "plain": ["Hi-C super-resolution deep learning", "Hi-C contact map enhancement", "single-cell Hi-C imputation"],
+    },
+    {
+        "name": "Sequence-to-3D prediction",
+        "groups": [
+            ["genome folding", "3D genome", "chromatin contact", "contact map", "Hi-C",
+             "chromatin interaction", "chromatin organization", "chromatin conformation"],
+            ["DNA sequence", "sequence-based", "from sequence", "in silico mutagenesis",
+             "variant effect", "sequence model"],
+        ],
+        "plain": ["predicting 3D genome folding from DNA sequence", "sequence-based prediction of chromatin contacts"],
+    },
+    {
+        "name": "TAD & compartment calling",
+        "groups": [
+            ["topologically associating domain", "topologically associated domain", "TAD boundary",
+             "TAD calling", "A/B compartment", "chromatin compartment", "domain boundary"],
+            M_COMP + M_DL + ["prediction", "detection", "identification", "calling"],
+        ],
+        "plain": ["TAD boundary prediction machine learning", "TAD calling algorithm Hi-C"],
+    },
+    {
+        "name": "Loops & chromatin interactions",
+        "groups": [
+            ["chromatin loop", "loop calling", "loop detection", "chromatin interaction",
+             "enhancer-promoter interaction", "enhancer-promoter contact", "promoter-enhancer interaction"],
+            M_COMP + M_DL + ["prediction", "detection"],
+        ],
+        "plain": ["chromatin loop detection deep learning", "enhancer-promoter interaction prediction deep learning"],
+    },
+    {
+        "name": "Single-cell 3D genome",
+        "groups": [
+            ["single-cell Hi-C", "scHi-C", "single-nucleus Hi-C", "Dip-C", "sn-m3C-seq",
+             "single-cell 3D genome", "single-cell chromatin conformation"],
+        ],
+        "plain": ["single-cell Hi-C computational analysis", "single-cell 3D genome embedding"],
+    },
+    {
+        "name": "3D structure modeling",
+        "groups": [
+            ["3D genome structure", "chromosome structure", "3D chromatin structure", "genome structure",
+             "chromatin structure", "3D chromosome"],
+            ["reconstruction", "polymer model", "polymer simulation", "molecular dynamics",
+             "structure modeling", "3D modeling", "structure inference"],
+        ],
+        "plain": ["3D chromosome structure reconstruction Hi-C", "chromatin polymer model simulation Hi-C"],
+    },
+    {
+        "name": "Loop extrusion modeling",
+        "groups": [
+            ["loop extrusion", "CTCF", "cohesin"],
+            ["model", "simulation", "prediction", "deep learning", "machine learning", "computational"],
+            ["chromatin", "genome", "Hi-C", "TAD"],
+        ],
+        "plain": ["loop extrusion model simulation Hi-C"],
+    },
+    {
+        "name": "Graph & multi-omics methods",
+        "groups": [
+            G_CORE,
+            ["graph", "hypergraph", "multi-omics", "multiomics", "integrative", "multimodal", "embedding"],
+        ],
+        "plain": ["graph neural network Hi-C", "multi-omics integration 3D genome"],
+    },
+    {
+        "name": "Imaging-based 3D genome",
+        "groups": [
+            ["chromatin tracing", "chromosome tracing", "ORCA", "multiplexed DNA FISH", "DNA seqFISH",
+             "Hi-M", "MERFISH chromatin"],
+        ],
+        "plain": ["chromatin tracing imaging 3D genome"],
+    },
+    {
+        "name": "Tools & resources",
+        "groups": [
+            ["Hi-C", "Micro-C", "HiChIP", "3D genome", "chromatin conformation capture"],
+            ["software", "toolkit", "pipeline", "database", "genome browser", "visualization",
+             "normalization", "web server", "package", "benchmark"],
+        ],
+        "plain": ["Hi-C data analysis software", "Hi-C normalization benchmark"],
+    },
+    {
+        "name": "3D genome in disease",
+        "groups": [
+            G_CORE,
+            ["disease", "cancer", "structural variant", "enhancer hijacking", "GWAS", "non-coding variant"],
+            M_COMP + M_DL + ["prediction"],
+        ],
+        "plain": ["3D genome structural variants cancer computational"],
+    },
+]
+
+# ---------------------------------------------------------------------------
+# Relevance vocabularies
+# ---------------------------------------------------------------------------
+# A paper enters the database only if it mentions at least one *core* 3D
+# genome term and (core + context - negative) reaches MIN_GENOME_SCORE.
+# Title hits count double.
+MIN_GENOME_SCORE = 4.5
+
+GENOME_CORE_TERMS: dict[str, float] = {
+    "3D genome": 3, "3D genomic": 3, "three-dimensional genome": 3, "three-dimensional genomic": 3,
+    "3D chromatin": 3, "three-dimensional chromatin": 3, "3D chromosome": 3,
+    "chromatin conformation": 3, "chromosome conformation": 3,
+    "re:(?<![A-Za-z0-9])(?:Hi-?C|HI-C|hi-c)s?(?![A-Za-z0-9])": 3,
+    "Micro-C": 3, "HiChIP": 3, "PLAC-seq": 3, "ChIA-PET": 3, "ChIA-Drop": 3,
+    "Capture-C": 3, "4C-seq": 3, "Pore-C": 3, "SPRITE": 2, "genome architecture mapping": 3,
+    "Dip-C": 3, "re:(?<![A-Za-z0-9])sc-?Hi-?C": 3, "sn-m3C-seq": 3, "snm3C-seq": 3,
+    "topologically associating domain": 3, "topologically associated domain": 3, "TAD": 2,
+    "chromatin loop": 3, "chromatin looping": 3, "CTCF loop": 3, "loop extrusion": 3,
+    "A/B compartment": 3, "chromatin compartment": 3,
+    "genome folding": 3, "chromatin folding": 3, "chromosome folding": 3,
+    "chromatin architecture": 3, "chromatin contact": 3, "contact map": 2, "contact matrix": 2,
+    "contact matrices": 2, "chromatin interaction": 3,
+    "enhancer-promoter interaction": 3, "enhancer-promoter contact": 3, "enhancer-promoter loop": 3,
+    "promoter-enhancer interaction": 3, "E-P interaction": 3,
+    "chromatin tracing": 3, "chromosome tracing": 3, "chromosome territory": 3, "chromosome territories": 3,
+    "lamina-associated domain": 3, "insulation score": 3, "4D nucleome": 3, "nucleome": 3,
+    "spatial genome organization": 3,
+    "re:(?i)(?:3D|three-dimensional|spatial|higher-order)\\s+(?:organi[sz]ation|architecture|structure|folding)\\s+of\\s+(?:the\\s+)?(?:genome|chromatin|chromosomes?)": 3,
+}
+
+GENOME_CONTEXT_TERMS: dict[str, float] = {
+    "genome organization": 2, "genome organisation": 2, "chromatin organization": 2,
+    "chromatin organisation": 2, "nuclear organization": 1.5, "nuclear architecture": 1.5,
+    "genome architecture": 1.5, "chromatin structure": 1.5, "chromosome structure": 1.5,
+    "long-range interaction": 1.5, "long-range regulation": 1, "DNA loop": 1, "DNA looping": 1,
+    "CTCF": 2, "cohesin": 1.5, "condensin": 1, "insulator": 1, "domain boundary": 1.5,
+    "compartmentalization": 1, "LAD": 1, "nuclear lamina": 1.5, "nuclear speckle": 1,
+    "phase separation": 0.5, "polymer model": 1.5, "polymer simulation": 1.5,
+    "spatial proximity": 1, "3C": 1, "5C": 1, "GAM": 0.5, "ORCA": 1,
+    "chromatin": 0.5, "chromosome": 0.5, "enhancer": 0.5, "nucleosome": 0.5,
+}
+
+NEGATIVE_TERMS: dict[str, float] = {
+    "genome assembly": 4, "chromosome-level": 4, "chromosome-scale": 4, "chromosome level genome": 4,
+    "haplotype-resolved": 3, "scaffolding": 3, "de novo assembly": 3, "reference genome": 1.5,
+    "re:(?i)metagenom\\w*": 3, "re:(?i)\\bviromes?\\b": 2,
+    "transactivation domain": 4, "transactivation": 2, "trans-activation domain": 4,
+    "protein structure prediction": 4, "protein folding": 3, "protein contact": 4,
+    "residue contact": 3, "amino acid": 1.5, "hydrophobic interaction chromatography": 5,
+    "re:3C-?like|3CL(?:pro)?": 3, "left anterior descending": 5, "coronary": 3,
+}
+
+EXCLUDE_TITLE_PATTERN = (
+    "re:(?i)^\\s*(?:correction|erratum|corrigendum|retraction|retracted|author correction|"
+    "publisher correction|expression of concern|reply to|response to|comment on)\\b"
+)
+
+DL_TERMS: dict[str, float] = {
+    "deep learning": 3, "deep-learning": 3, "deep neural network": 3, "neural network": 3,
+    "convolutional": 3, "CNN": 3, "transformer": 3, "self-attention": 3, "attention mechanism": 3,
+    "attention-based": 2, "graph neural network": 3, "GNN": 3, "graph convolutional": 3,
+    "graph attention": 3, "generative adversarial": 3, "GAN": 3, "diffusion model": 3,
+    "denoising diffusion": 3, "autoencoder": 3, "auto-encoder": 3, "VAE": 3, "U-Net": 3,
+    "ResNet": 3, "LSTM": 3, "long short-term memory": 3, "recurrent neural": 3, "RNN": 3,
+    "language model": 3, "large language model": 3, "LLM": 3, "foundation model": 3,
+    "contrastive learning": 3, "self-supervised": 3, "transfer learning": 3, "representation learning": 2,
+    "pre-trained": 2, "pretrained": 2, "pre-training": 2, "pretraining": 2, "BERT": 2, "GPT": 2,
+    "multilayer perceptron": 2, "MLP": 1, "few-shot": 2, "zero-shot": 2,
+}
+
+ML_TERMS: dict[str, float] = {
+    "machine learning": 2, "machine-learning": 2, "random forest": 2, "gradient boosting": 2,
+    "XGBoost": 2, "LightGBM": 2, "support vector machine": 2, "SVM": 2, "supervised learning": 2,
+    "unsupervised learning": 2, "reinforcement learning": 2, "artificial intelligence": 2,
+    "AI": 1, "logistic regression": 1, "classifier": 1, "embedding": 1, "latent space": 1,
+}
+
+COMPUTATIONAL_TERMS: dict[str, float] = {
+    "algorithm": 2, "computational": 2, "software": 2, "toolkit": 2, "tool": 1, "pipeline": 1,
+    "package": 1, "web server": 2, "database": 1, "framework": 1, "statistical": 1,
+    "probabilistic": 1, "Bayesian": 1, "simulation": 1, "polymer model": 2, "in silico": 1,
+    "benchmark": 1, "open-source": 2, "open source": 2, "re:(?i)github\\.com|bitbucket|zenodo|pypi|bioconductor": 2,
+    "re:(?i)\\bwe (?:develop|present|introduce|propose|describe)\\w*": 1, "method": 0.5,
+}
+
+TRACKS: dict[str, str] = {
+    "ml": "AI / ML",
+    "computational": "Computational",
+    "experimental": "Experimental & Biology",
+}
+
+# Deep-learning architecture families: label -> terms
+DL_METHODS: dict[str, list[str]] = {
+    "CNN": ["CNN", "convolutional neural network", "convolutional network", "convolutional layer",
+            "ResNet", "U-Net", "dilated convolution"],
+    "Transformer / Attention": ["transformer", "self-attention", "multi-head attention",
+                                "attention mechanism", "attention-based", "vision transformer", "ViT"],
+    "GNN": ["graph neural network", "GNN", "graph convolutional", "GCN", "graph attention", "GAT",
+            "message passing", "graph transformer", "hypergraph neural network"],
+    "GAN": ["generative adversarial", "GAN", "WGAN", "CycleGAN", "adversarial training"],
+    "Autoencoder / VAE": ["autoencoder", "auto-encoder", "VAE", "variational autoencoder",
+                          "encoder-decoder"],
+    "Diffusion Model": ["diffusion model", "denoising diffusion", "DDPM", "score-based generative",
+                        "latent diffusion"],
+    "RNN / LSTM": ["recurrent neural network", "RNN", "LSTM", "long short-term memory", "GRU",
+                   "BiLSTM", "Bi-LSTM"],
+    "Language / Foundation Model": ["foundation model", "large language model", "LLM", "language model",
+                                    "BERT", "GPT", "DNABERT", "nucleotide transformer", "HyenaDNA"],
+    "Contrastive / Self-supervised": ["contrastive learning", "self-supervised", "siamese network",
+                                      "triplet loss", "masked modeling"],
+    "Transfer Learning": ["transfer learning", "domain adaptation", "fine-tuning", "fine-tuned",
+                          "pre-trained", "pretrained"],
+    "Tree Ensembles": ["random forest", "XGBoost", "gradient boosting", "LightGBM", "decision tree"],
+    "Classical ML": ["support vector machine", "SVM", "logistic regression", "naive Bayes",
+                     "k-nearest neighbor", "hidden Markov model", "HMM"],
+    "Reinforcement Learning": ["reinforcement learning", "policy gradient", "Q-learning"],
+}
+
+# Named 3D-genome tools / models: label -> terms
+GENOME_TOOLS: dict[str, list[str]] = {
+    "Akita": ["Akita"],
+    "Orca": ["re:\\bOrca\\b"],
+    "C.Origami": ["re:C\\.\\s?Origami"],
+    "DeepC": ["re:\\bDeepC\\b"],
+    "ChromaFold": ["ChromaFold"],
+    "EPCOT": ["EPCOT"],
+    "Enformer": ["Enformer"],
+    "Borzoi": ["Borzoi"],
+    "Basenji": ["Basenji"],
+    "HiCPlus": ["HiCPlus", "HiC-Plus"],
+    "HiCNN": ["HiCNN"],
+    "DeepHiC": ["DeepHiC"],
+    "hicGAN": ["hicGAN"],
+    "HiCSR": ["HiCSR"],
+    "HiCARN": ["HiCARN"],
+    "HiCDiff": ["HiCDiff", "HiCDiffusion"],
+    "Higashi": ["Higashi"],
+    "scHiCluster": ["scHiCluster"],
+    "Peakachu": ["Peakachu"],
+    "DeepLoop": ["DeepLoop"],
+    "Mustache": ["re:\\bMustache\\b"],
+    "Chromosight": ["Chromosight"],
+    "HiCCUPS": ["re:\\bHiCCUPS\\b"],
+    "Fit-Hi-C": ["re:\\bFit-?Hi-?C\\d?\\b"],
+    "Juicer": ["re:\\bJuicer(?:box)?\\b"],
+    "HiC-Pro": ["HiC-Pro"],
+    "cooler": ["re:\\bcooler\\b"],
+    "HiCExplorer": ["HiCExplorer"],
+    "HiGlass": ["HiGlass"],
+    "HiCRep": ["HiCRep"],
+    "Dip-C": ["Dip-C"],
+}
+
+# ---------------------------------------------------------------------------
+# Research categories.  A paper gets up to MAX_CATEGORIES_PER_PAPER labels:
+# those whose score reaches MIN_CATEGORY_SCORE and at least
+# CATEGORY_RELATIVE_CUTOFF x the best category's score.
+# ---------------------------------------------------------------------------
+MAX_CATEGORIES_PER_PAPER = 3
+MIN_CATEGORY_SCORE = 2.0
+CATEGORY_RELATIVE_CUTOFF = 0.34
+FALLBACK_CATEGORY = "Other 3D Genome"
+
 CATEGORIES: dict[str, dict] = {
     "Hi-C Enhancement & Super-Resolution": {
-        "description": "Methods using deep learning to enhance Hi-C contact map resolution",
-        "keywords": ["super-resolution", "enhance", "hicsr", "deephic", "hicplus", "hicnn",
-                      "resolution enhancement", "upscale", "upsampling", "imputation",
-                      "hi-c enhancement", "contact map enhancement", "low-resolution"],
+        "description": "Enhancing, denoising and imputing sparse or low-resolution Hi-C / Micro-C contact maps",
+        "terms": {
+            "super-resolution": 3, "resolution enhancement": 3, "Hi-C enhancement": 3,
+            "re:(?i)enhanc\\w*\\s+(?:the\\s+)?(?:(?:spatial\\s+)?resolution|(?:sparse\\s+|low[\\s-]resolution\\s+)?Hi-?C|contact\\s+maps?)": 3,
+            "low-resolution": 2, "imputation": 2, "impute": 2, "imputing": 2, "denoising": 2, "denoise": 2,
+            "upsampling": 2, "downsampled": 1, "sequencing depth": 1, "low-coverage": 1, "sparsity": 1,
+            "HiCPlus": 4, "HiCNN": 4, "DeepHiC": 4, "hicGAN": 4, "HiCSR": 4, "HiCARN": 4,
+            "re:VEHiCLE": 4, "HiCDiff": 4, "HiCDiffusion": 4, "SRHiC": 4, "Higashi": 1,
+        },
     },
     "3D Structure Prediction": {
-        "description": "Predicting 3D chromatin/chromosome structure from sequence or contact maps",
-        "keywords": ["3d structure", "structure prediction", "3d reconstruction",
-                      "chromosome structure", "3d fold", "3d organization",
-                      "spatial structure", "chromatin structure prediction",
-                      "3d model", "chromosome model", "genome structure"],
+        "description": "Reconstructing 3D chromosome / genome structures and structural ensembles",
+        "terms": {
+            "3D structure": 2, "3D structures": 2, "3D reconstruction": 3, "structure reconstruction": 3,
+            "re:(?i)reconstruct\\w*\\s+(?:the\\s+)?(?:3D|three-dimensional)": 3,
+            "3D genome structure": 3, "3D chromosome structure": 3, "3D chromatin structure": 3,
+            "3D model": 2, "3D modeling": 2, "3D modelling": 2, "structural ensemble": 3,
+            "ensemble of structures": 3, "structure inference": 3, "spatial coordinates": 2,
+            "multidimensional scaling": 2, "chromosome structure": 1, "genome structure": 1,
+            "Pastis": 3, "ShRec3D": 3, "Chromosome3D": 3, "3DMax": 3, "LorDG": 3,
+        },
     },
     "TAD & Compartment Detection": {
-        "description": "Identifying topologically associating domains, sub-TADs, and A/B compartments",
-        "keywords": ["tad", "topologically associating domain", "compartment", "boundary",
-                      "domain detection", "insulation", "tadpole", "deeptad", "domain boundary",
-                      "sub-tad", "a/b compartment", "compartmentalization", "insulation score",
-                      "arrowhead", "topdom", "hicexplorer"],
+        "description": "Calling and predicting TADs, sub-TADs, domain boundaries and A/B (sub)compartments",
+        "terms": {
+            "TAD": 2, "topologically associating domain": 2, "topologically associated domain": 2,
+            "TAD boundary": 3, "TAD boundaries": 3, "sub-TAD": 3, "domain boundary": 2, "domain boundaries": 2,
+            "domain calling": 3, "domain caller": 3, "TAD calling": 3, "TAD caller": 3, "domain detection": 3,
+            "hierarchical domain": 2, "insulation score": 2, "insulation": 1,
+            "A/B compartment": 3, "subcompartment": 3, "sub-compartment": 3, "compartmentalization": 2,
+            "compartment": 1, "re:Arrowhead": 3, "TopDom": 3, "Armatus": 3, "deDoc": 3, "SpectralTAD": 3,
+            "OnTAD": 3, "TADbit": 3, "deepTAD": 3, "re:TADpole": 3,
+        },
     },
     "Chromatin Loop & Interaction Prediction": {
-        "description": "Predicting chromatin loops, enhancer-promoter interactions, and contacts",
-        "keywords": ["chromatin loop", "interaction prediction", "contact prediction", "enhancer-promoter",
-                      "chromatin interaction", "loop extrusion", "loop detection",
-                      "deeploop", "peakachu", "chromosight", "hiccups", "mustache",
-                      "significant interaction", "peak calling"],
+        "description": "Detecting and predicting chromatin loops, enhancer-promoter and other long-range contacts",
+        "terms": {
+            "chromatin loop": 2, "loop calling": 3, "loop caller": 3, "loop detection": 3,
+            "loop prediction": 3, "chromatin interaction": 2, "interaction prediction": 3,
+            "enhancer-promoter": 2, "promoter-enhancer": 2, "E-P interaction": 2,
+            "long-range interaction": 1, "significant interaction": 2, "target gene": 1,
+            "re:(?i)predict\\w*\\s+(?:\\w+\\s+){0,3}(?:loops|interactions|contacts)": 2,
+            "re:\\bHiCCUPS\\b": 3, "Peakachu": 3, "re:\\bMustache\\b": 3, "Chromosight": 3, "DeepLoop": 3,
+            "re:\\bFit-?Hi-?C\\d?\\b": 3, "HiC-DC": 3, "RefHiC": 3, "LoopNet": 3,
+        },
     },
     "CTCF, Cohesin & Loop Extrusion": {
-        "description": "CTCF binding, cohesin dynamics, and loop extrusion mechanisms",
-        "keywords": ["ctcf", "cohesin", "loop extrusion", "smc complex", "wapl", "nipbl",
-                      "convergent ctcf", "ctcf binding", "ctcf motif", "extrusion barrier",
-                      "cohesin loading", "cohesin release", "topological insulator"],
+        "description": "CTCF binding, cohesin / condensin dynamics and the loop-extrusion mechanism",
+        "terms": {
+            "CTCF": 2, "cohesin": 2, "loop extrusion": 3, "SMC complex": 2, "WAPL": 2, "NIPBL": 2,
+            "RAD21": 2, "condensin": 2, "STAG2": 1, "convergent": 1, "CTCF motif": 2, "extrusion": 1,
+            "insulator": 1, "YY1": 1,
+        },
     },
     "Epigenomics & Sequence-based Prediction": {
-        "description": "Predicting epigenomic signals and chromatin features from DNA sequence",
-        "keywords": ["sequence-based", "epigenome", "epigenomic", "dna sequence",
-                      "akita", "orca", "sei", "enformer", "basenji", "sequence model",
-                      "nucleotide", "variant effect", "from sequence",
-                      "sequence-to-function", "genomic sequence"],
+        "description": "Predicting 3D contacts from DNA sequence and epigenomic features (Akita, Orca, C.Origami, ...)",
+        "terms": {
+            "DNA sequence": 2, "sequence-based": 2, "sequence alone": 3, "from sequence": 2,
+            "sequence features": 1, "in silico mutagenesis": 3, "in silico perturbation": 3,
+            "in silico screen": 3, "variant effect": 2, "genetic variant": 1, "epigenomic": 1,
+            "epigenetic features": 1, "histone": 1, "chromatin accessibility": 1,
+            "re:(?i)predict\\w*\\s+(?:\\w+\\s+){0,4}(?:contact\\s+maps?|Hi-?C|3D\\s+genome|genome\\s+folding|chromatin\\s+(?:structure|organi[sz]ation|contacts|folding))": 3,
+            "Akita": 3, "re:\\bOrca\\b": 3, "re:C\\.\\s?Origami": 3, "re:\\bDeepC\\b": 3, "ChromaFold": 3,
+            "EPCOT": 3, "Enformer": 2, "Borzoi": 2, "Basenji": 2, "re:\\bSei\\b": 1,
+        },
     },
     "Single-cell 3D Genomics": {
-        "description": "Deep learning methods for single-cell Hi-C and 3D genome analysis",
-        "keywords": ["single-cell", "single cell", "schic", "sc-hi-c", "scool",
-                      "cell-type specific", "cell type", "imputation single cell",
-                      "single-cell hi-c", "dip-c", "single-cell 3d", "cell-to-cell variability",
-                      "single cell chromatin"],
+        "description": "Single-cell and single-nucleus 3D genome assays and their computational analysis",
+        "terms": {
+            "single-cell": 2, "single cell": 2, "single-nucleus": 2, "re:sc-?Hi-?C": 3, "Dip-C": 3,
+            "sn-m3C-seq": 3, "snm3C": 3, "HiRES": 2, "cell-to-cell variability": 2, "cell type": 1,
+            "cell-type": 1, "Higashi": 3, "scHiCluster": 3, "Fast-Higashi": 3, "BandNorm": 3, "scGAD": 3,
+        },
     },
     "Multi-omics Integration": {
-        "description": "Integrating 3D genome data with other omics using deep learning",
-        "keywords": ["multi-omics", "multiomics", "integration", "gene expression",
-                      "transcription", "chip-seq", "atac-seq", "methylation",
-                      "multi-modal", "multimodal", "joint analysis",
-                      "epigenome integration", "transcriptome"],
+        "description": "Integrating 3D genome data with transcriptomic, epigenomic and other modalities",
+        "terms": {
+            "multi-omics": 3, "multiomics": 3, "multi-omic": 3, "multi-modal": 2, "multimodal": 2,
+            "integrative analysis": 2, "data integration": 2, "integrating": 1, "ChIP-seq": 0.5,
+            "ATAC-seq": 0.5, "RNA-seq": 0.5, "DNA methylation": 0.5, "histone modification": 0.5,
+            "gene expression": 0.5, "transcriptome": 0.5, "epigenome": 0.5, "epigenomic": 0.5,
+        },
     },
     "Generative & Foundation Models": {
-        "description": "Generative AI, foundation models, and large language models for genomics",
-        "keywords": ["generative", "diffusion", "vae", "variational autoencoder", "gan",
-                      "generative adversarial", "foundation model", "large language model",
-                      "llm", "transformer", "gpt", "bert", "pre-trained", "pretrained",
-                      "genomic language model", "dna language model"],
+        "description": "Generative models (GANs, VAEs, diffusion) and pre-trained foundation / language models",
+        "terms": {
+            "generative": 2, "diffusion model": 3, "denoising diffusion": 3, "VAE": 3,
+            "variational autoencoder": 3, "GAN": 3, "generative adversarial": 3, "foundation model": 3,
+            "large language model": 3, "LLM": 3, "language model": 3, "pre-trained": 2, "pretrained": 2,
+            "pre-training": 2, "pretraining": 2, "GPT": 2, "BERT": 2, "DNABERT": 3,
+            "nucleotide transformer": 3, "HyenaDNA": 3, "transformer": 1,
+        },
     },
     "Graph Neural Networks for Genomics": {
-        "description": "Using GNNs to model chromatin interaction networks and 3D genome graphs",
-        "keywords": ["graph neural network", "gnn", "graph convolutional", "gcn",
-                      "graph attention", "gat", "network embedding", "graph-based",
-                      "interaction network", "chromatin graph", "genome graph"],
+        "description": "Graph and hypergraph representations of chromatin contacts and GNN models",
+        "terms": {
+            "graph neural network": 3, "GNN": 3, "graph convolutional": 3, "GCN": 3, "graph attention": 3,
+            "GAT": 2, "graph transformer": 3, "graph embedding": 2, "node embedding": 2,
+            "network embedding": 2, "hypergraph": 3, "message passing": 2, "link prediction": 2,
+            "graph-based": 1, "graph representation": 2,
+        },
     },
     "Experimental Methods & Technologies": {
-        "description": "3C/4C/5C/Hi-C/Micro-C/HiChIP and other chromosome conformation capture technologies",
-        "keywords": ["hi-c", "micro-c", "hichip", "plac-seq", "capture-c", "capture hi-c",
-                      "4c-seq", "5c", "3c", "chromosome conformation capture",
-                      "chia-pet", "chia-drop", "sprite", "gam", "genome architecture mapping",
-                      "pore-c", "concatemer", "dna-fish", "chromatin tracing",
-                      "cut&run", "cut&tag", "damid", "tsa-seq"],
+        "description": "3C-derived, ligation-free and imaging technologies and protocols for mapping genome structure",
+        "terms": {
+            "protocol": 2, "technique": 1, "assay": 1, "proximity ligation": 2, "ligation-free": 3,
+            "crosslinking": 1, "cross-linking": 1, "restriction enzyme": 2, "MNase": 1, "library preparation": 2,
+            "in situ Hi-C": 2, "Micro-C": 1, "HiChIP": 1, "PLAC-seq": 1, "Capture-C": 2, "Capture Hi-C": 2,
+            "4C-seq": 2, "5C": 1, "ChIA-PET": 1, "ChIA-Drop": 2, "SPRITE": 2, "genome architecture mapping": 3,
+            "Pore-C": 2, "concatemer": 2, "multi-way contact": 2, "multiway": 1, "DamID": 2, "TSA-seq": 2,
+            "DNA-FISH": 2, "DNA FISH": 2, "chromatin tracing": 2, "long-read": 1,
+        },
     },
     "Nuclear Organization & Architecture": {
-        "description": "Nuclear structure, lamina-associated domains, nuclear bodies, and phase separation",
-        "keywords": ["nuclear organization", "nuclear architecture", "nuclear body",
-                      "nuclear speckle", "nucleolus", "nuclear lamina",
-                      "lamina-associated domain", "lad", "nuclear envelope",
-                      "chromosome territory", "nuclear compartment",
-                      "nuclear pore", "radial position"],
+        "description": "Nuclear bodies, lamina, speckles, chromosome territories and radial genome positioning",
+        "terms": {
+            "nuclear organization": 2, "nuclear organisation": 2, "nuclear architecture": 2,
+            "nuclear body": 2, "nuclear bodies": 2, "nuclear speckle": 3, "nucleolus": 2, "nucleolar": 2,
+            "nuclear lamina": 3, "lamina-associated domain": 3, "LAD": 2, "nuclear envelope": 2,
+            "nuclear periphery": 2, "chromosome territory": 3, "chromosome territories": 3,
+            "nuclear pore": 2, "radial position": 2, "heterochromatin": 1, "lamin": 1,
+        },
     },
     "Phase Separation & Chromatin": {
-        "description": "Liquid-liquid phase separation and its role in chromatin organization",
-        "keywords": ["phase separation", "liquid-liquid phase", "condensate",
-                      "biomolecular condensate", "intrinsically disordered",
-                      "droplet", "phase-separated", "membraneless organelle"],
+        "description": "Biomolecular condensates and phase separation in chromatin organization",
+        "terms": {
+            "phase separation": 3, "liquid-liquid phase": 3, "LLPS": 3, "condensate": 2,
+            "biomolecular condensate": 3, "phase-separated": 3, "intrinsically disordered": 1,
+            "membraneless": 2, "droplet": 1, "microphase": 2,
+        },
     },
     "Polymer Modeling & Simulation": {
-        "description": "Polymer physics models and molecular dynamics simulations of chromatin",
-        "keywords": ["polymer model", "polymer simulation", "molecular dynamics",
-                      "coarse-grained", "bead-spring", "monte carlo",
-                      "chromatin fiber", "chromosome simulation", "polymer physics",
-                      "string and binders", "block copolymer", "energy landscape"],
+        "description": "Polymer physics models and molecular / Brownian dynamics simulations of chromatin",
+        "terms": {
+            "polymer model": 3, "polymer simulation": 3, "polymer physics": 3, "molecular dynamics": 2,
+            "coarse-grained": 2, "bead-spring": 3, "Monte Carlo": 1, "Brownian dynamics": 2,
+            "chromatin fiber": 1, "block copolymer": 3, "strings and binders": 3, "loop extrusion model": 3,
+            "energy landscape": 2, "MiChroM": 3, "simulation": 1, "simulations": 1, "polymer": 1,
+        },
     },
     "Data Processing & Normalization": {
-        "description": "Tools for Hi-C data processing, normalization, and quality control",
-        "keywords": ["normalization", "bias correction", "ice normalization",
-                      "knight-ruiz", "matrix balancing", "data processing",
-                      "quality control", "mapping", "alignment", "binning",
-                      "juicer", "cooler", "hic-pro", "distiller", "pairtools",
-                      "valid pairs", "contact matrix"],
+        "description": "Hi-C processing pipelines, normalization, reproducibility and differential analysis",
+        "terms": {
+            "normalization": 2, "normalisation": 2, "bias correction": 3, "iterative correction": 3,
+            "Knight-Ruiz": 3, "matrix balancing": 3, "quality control": 1, "reproducibility": 1,
+            "differential analysis": 2, "differential interaction": 2, "differential chromatin": 2,
+            "file format": 2, "scalable": 1, "HiC-Pro": 3, "re:\\bJuicer\\b": 3, "re:\\bcooler\\b": 3,
+            "distiller": 2, "pairtools": 3, "HiCExplorer": 3, "FAN-C": 3, "HiCRep": 3, "GenomeDISCO": 3,
+            "diffHic": 3, "multiHiCcompare": 3, "CHESS": 2, "pipeline": 1,
+        },
     },
     "Visualization & Browsers": {
-        "description": "Genome browsers and visualization tools for 3D genome data",
-        "keywords": ["visualization", "genome browser", "3d genome browser",
-                      "higlass", "juicebox", "washu", "3d-genome browser",
-                      "contact map visualization", "heatmap", "arc plot",
-                      "virtual 4c", "genome viewer"],
+        "description": "Genome browsers, visualization tools, portals and databases for 3D genome data",
+        "terms": {
+            "visualization": 2, "visualisation": 2, "genome browser": 3, "HiGlass": 3, "Juicebox": 3,
+            "WashU": 3, "3D Genome Browser": 3, "interactive": 1, "heatmap": 1, "arc plot": 2,
+            "virtual 4C": 3, "web server": 2, "web portal": 2, "data portal": 2, "database": 1, "resource": 1,
+        },
     },
     "Disease & Clinical Applications": {
-        "description": "3D genome alterations in disease, cancer, and developmental disorders",
-        "keywords": ["disease", "cancer", "disorder", "clinical", "pathogenic",
-                      "oncogene", "tumor", "patient", "therapeutic",
-                      "structural variant", "translocation", "deletion",
-                      "tad disruption", "enhancer hijacking", "ectopic contact",
-                      "congenital", "developmental disorder"],
+        "description": "3D genome alterations in cancer, developmental disorders and complex-trait genetics",
+        "terms": {
+            "disease": 0.5, "cancer": 2, "tumor": 2, "tumour": 2, "leukemia": 2, "leukaemia": 2, "lymphoma": 2,
+            "re:(?i)oncogen\\w*": 2, "clinical": 0.5, "patient": 0.5, "pathogenic": 2, "structural variant": 2,
+            "structural variation": 2, "translocation": 1, "enhancer hijacking": 3, "TAD disruption": 3,
+            "ectopic contact": 3, "congenital": 2, "developmental disorder": 2, "GWAS": 2,
+            "risk variant": 2, "non-coding variant": 2, "noncoding variant": 2, "SNP": 0.5,
+        },
     },
     "Evolution & Conservation": {
-        "description": "Evolutionary conservation and divergence of 3D genome organization",
-        "keywords": ["evolution", "conservation", "conserved", "divergence",
-                      "comparative", "synteny", "ortholog", "phylogenetic",
-                      "cross-species", "evolutionary constraint"],
+        "description": "Evolutionary conservation and divergence of 3D genome organization across species",
+        "terms": {
+            "evolution": 2, "evolutionary": 2, "conservation": 1, "conserved": 0.5, "divergence": 1,
+            "comparative": 1, "synteny": 3, "syntenic": 3, "ortholog": 2, "orthologous": 2,
+            "phylogenetic": 2, "cross-species": 3, "across species": 2, "species": 0.5,
+        },
     },
     "Benchmark & Review": {
-        "description": "Benchmarks, reviews, and surveys of computational methods",
-        "keywords": ["benchmark", "review", "survey", "comparison", "evaluation",
-                      "comprehensive analysis", "systematic review", "meta-analysis",
-                      "perspective", "overview", "tutorial", "guideline", "best practice",
-                      "protocol"],
+        "description": "Reviews, benchmarks, comparisons and perspectives on 3D genome methods",
+        "title_only": True,
+        "pub_types": ["review", "systematic review", "meta-analysis"],
+        "terms": {
+            "review": 3, "survey": 3, "benchmark": 3, "benchmarking": 3, "comparison": 2,
+            "comparative analysis": 2, "systematic evaluation": 3, "evaluation": 1, "perspective": 2,
+            "overview": 2, "primer": 2, "tutorial": 2, "guide": 1, "best practice": 2, "challenges": 1,
+            "opportunities": 1, "recent advances": 2, "advances in": 1, "roadmap": 1,
+        },
     },
 }
 
@@ -255,7 +573,7 @@ CATEGORIES: dict[str, dict] = {
 # Email configuration (via environment variables)
 # ---------------------------------------------------------------------------
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587") or 587)
 SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 EMAIL_FROM = os.getenv("EMAIL_FROM", "")
@@ -264,9 +582,16 @@ EMAIL_RECIPIENTS = [
     for addr in os.getenv("EMAIL_RECIPIENTS", "").split(",")
     if addr.strip()
 ]
+EMAIL_MAX_PAPERS = 60
 
 # ---------------------------------------------------------------------------
-# GitHub configuration (for auto-commit)
+# Web GUI
+# ---------------------------------------------------------------------------
+WEB_HOST = os.getenv("GENOME_HUB_HOST", "127.0.0.1")
+WEB_PORT = int(os.getenv("GENOME_HUB_PORT", "8686") or 8686)
+
+# ---------------------------------------------------------------------------
+# GitHub configuration (optional)
 # ---------------------------------------------------------------------------
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 GITHUB_REPO = os.getenv("GITHUB_REPO", "Yin-Shen/3DGenomeHub")

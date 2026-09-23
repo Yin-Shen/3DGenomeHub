@@ -1,0 +1,16 @@
+{
+  "status": "ok", "message-type": "work-list",
+  "message": {
+    "total-results": 2,
+    "items": [
+      {"DOI": "10.1234/ngs.2024.555", "title": ["Identifying topologically associating domains with a scalable algorithm"],
+       "author": [{"given": "Maria", "family": "Rossi", "sequence": "first"}],
+       "abstract": "<jats:title>Abstract</jats:title><jats:p>We present an algorithm for calling <jats:italic>TADs</jats:italic> and TAD boundaries in Hi-C contact matrices; the open-source software is available on GitHub.</jats:p>",
+       "container-title": ["NAR Genomics and Bioinformatics"], "issued": {"date-parts": [[2024, 5, 20]]},
+       "published-online": {"date-parts": [[2024, 5, 18]]}, "type": "journal-article", "is-referenced-by-count": 7},
+      {"DOI": "10.5555/meta.2020.1", "title": ["Metadata standards for clinical data status reporting"],
+       "author": [{"given": "Tadeusz", "family": "Nowak"}], "container-title": ["Health Informatics"],
+       "issued": {"date-parts": [[2020]]}, "type": "journal-article", "is-referenced-by-count": 1}
+    ]
+  }
+}

@@ -1,22 +1,27 @@
-"""Command-line interface for 3D Genome & Deep Learning Literature Hub."""
+"""Command-line interface for the 3D Genome & Deep Learning Literature Hub."""
 
 from __future__ import annotations
 
 import json
 import logging
 import sys
+from pathlib import Path
+from typing import Optional
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
-from . import config
-from .categorizer import categorize_papers, get_statistics, group_by_category
-from .fetcher import fetch_all_papers
-from .pipeline import run_pipeline
-from .readme_generator import generate_readme
-from .storage import load_papers, merge_papers, save_papers
-from .summarizer import generate_digest
+from . import __version__, config
+from .analyzer import analyze_papers
+from .categorizer import get_statistics
+from .pipeline import last_new_papers, refresh_annotations, run_pipeline
+from .readme_generator import write_outputs
+from .records import PaperIndex
+from .relevance import track_label
+from .search import search_papers, to_bibtex, to_csv
+from .storage import load_papers, save_papers
+from .summarizer import generate_digest, short_authors
 
 app = typer.Typer(
     name="genome-literature",
@@ -27,235 +32,224 @@ console = Console()
 
 
 def _setup_logging(verbose: bool = False) -> None:
-    level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
-        level=level,
+        level=logging.DEBUG if verbose else logging.INFO,
         format="[%(asctime)s] %(levelname)s %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
         stream=sys.stderr,
     )
 
 
-# ---------------------------------------------------------------------------
-# Commands
-# ---------------------------------------------------------------------------
+def _sources(value: Optional[str]) -> Optional[list[str]]:
+    if not value:
+        return None
+    sources = [s.strip() for s in value.split(",") if s.strip()]
+    unknown = [s for s in sources if s not in config.ALL_SOURCES]
+    if unknown:
+        raise typer.BadParameter(f"unknown source(s) {unknown}; choose from {config.ALL_SOURCES}")
+    return sources
 
 
-@app.command()
-def fetch(
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
-) -> None:
-    """Fetch papers from PubMed, bioRxiv, and arXiv."""
-    _setup_logging(verbose)
-    console.print("[bold blue]Fetching papers from all sources...[/]")
-
-    papers = fetch_all_papers()
-    categorize_papers(papers)
-
-    console.print(f"[green]Fetched {len(papers)} unique papers[/]")
-
-    # Merge with existing
-    existing = load_papers()
-    all_papers, new_papers = merge_papers(existing, papers)
-    save_papers(all_papers)
-
-    if new_papers:
-        save_papers(new_papers, config.NEW_PAPERS_JSON)
-        console.print(f"[bold green]{len(new_papers)} new papers added![/]")
-    else:
-        console.print("[yellow]No new papers found.[/]")
-
-    console.print(f"Total papers in database: {len(all_papers)}")
-
-
-@app.command()
-def update_readme(
-    verbose: bool = typer.Option(False, "--verbose", "-v"),
-) -> None:
-    """Regenerate README.md from the paper database."""
-    _setup_logging(verbose)
+def _require_papers() -> list[dict]:
     papers = load_papers()
     if not papers:
-        console.print("[red]No papers in database. Run 'fetch' first.[/]")
+        console.print("[red]No papers in database. Run 'run-pipeline' first.[/]")
         raise typer.Exit(1)
-
-    categorize_papers(papers)
-    content = generate_readme(papers)
-    config.README_PATH.write_text(content, encoding="utf-8")
-    console.print(f"[green]README.md updated with {len(papers)} papers.[/]")
+    return papers
 
 
-@app.command()
-def stats(
-    verbose: bool = typer.Option(False, "--verbose", "-v"),
-) -> None:
-    """Show statistics about the paper database."""
-    _setup_logging(verbose)
-    papers = load_papers()
-    if not papers:
-        console.print("[red]No papers in database. Run 'fetch' first.[/]")
-        raise typer.Exit(1)
-
-    categorize_papers(papers)
-    s = get_statistics(papers)
-
-    console.print(f"\n[bold]Total papers: {s['total_papers']}[/]\n")
-
-    # Year table
-    table = Table(title="Papers by Year")
-    table.add_column("Year", style="cyan")
-    table.add_column("Count", style="green")
-    table.add_column("Bar")
-    for year, count in sorted(s["by_year"].items(), reverse=True):
-        bar = "█" * min(count, 60)
-        table.add_row(str(year), str(count), bar)
-    console.print(table)
-
-    # Source table
-    table = Table(title="Papers by Source")
-    table.add_column("Source", style="cyan")
-    table.add_column("Count", style="green")
-    for source, count in s["by_source"].items():
-        table.add_row(source, str(count))
-    console.print(table)
-
-    # Category table
-    table = Table(title="Papers by Category")
-    table.add_column("Category", style="cyan")
-    table.add_column("Count", style="green")
-    for cat, count in s["by_category"].items():
-        table.add_row(cat, str(count))
-    console.print(table)
+def _report(result: dict) -> None:
+    console.print(f"\n[bold green]Pipeline completed[/] ({result.get('mode', 'no fetch')}"
+                  f"{', since ' + result['since'] if result.get('since') else ''})")
+    console.print(f"  Candidates fetched: {result.get('fetched_count', 0)}")
+    console.print(f"  Passed relevance:   {result.get('relevant_count', 0)}")
+    console.print(f"  New papers:         {result.get('new_count', 0)}")
+    console.print(f"  Pruned:             {result.get('pruned_count', 0)}")
+    console.print(f"  Total in database:  {result.get('total_count', 0)}")
+    errors = result.get("fetch_errors") or []
+    if errors:
+        console.print(f"[yellow]  {len(errors)} queries failed:[/]")
+        for e in errors[:10]:
+            console.print(f"    {e['source']}: {e['error'][:150]}")
 
 
-@app.command()
-def search(
-    query: str = typer.Argument(..., help="Search query"),
-    limit: int = typer.Option(20, "--limit", "-n", help="Max results"),
-    verbose: bool = typer.Option(False, "--verbose", "-v"),
-) -> None:
-    """Search the local paper database by keyword."""
-    _setup_logging(verbose)
-    papers = load_papers()
-    if not papers:
-        console.print("[red]No papers in database. Run 'fetch' first.[/]")
-        raise typer.Exit(1)
-
-    terms = query.lower().split()
-    results = []
-    for p in papers:
-        text = f"{p.get('title', '')} {p.get('abstract', '')} {' '.join(p.get('categories', []))}".lower()
-        score = sum(1 for t in terms if t in text)
-        if score > 0:
-            results.append((score, p))
-
-    results.sort(key=lambda x: x[0], reverse=True)
-    results = results[:limit]
-
-    if not results:
-        console.print(f"[yellow]No papers matching '{query}'[/]")
-        return
-
-    console.print(f"\n[bold]Found {len(results)} papers matching '{query}':[/]\n")
-    for score, p in results:
-        authors = p["authors"][0] + " et al." if len(p["authors"]) > 1 else (p["authors"][0] if p["authors"] else "?")
-        cats = ", ".join(p.get("categories", []))
-        console.print(f"  [bold]{p['title']}[/]")
-        console.print(f"  {authors} | {p.get('journal', '')} ({p.get('year', '')})")
-        console.print(f"  Categories: {cats}")
-        console.print(f"  {p.get('url', '')}")
-        console.print()
+def _exit_if_fetch_failed(result: dict) -> None:
+    if result.get("fetch_errors") and not result.get("fetched_count"):
+        console.print("[red]Every query failed — check network access to the literature APIs.[/]")
+        raise typer.Exit(2)
 
 
 @app.command(name="run-pipeline")
 def run_pipeline_cmd(
+    since: Optional[str] = typer.Option(None, help="Only fetch papers published since YYYY-MM-DD"),
+    backfill: bool = typer.Option(False, "--backfill", help="Relevance-ranked search across all years"),
+    sources: Optional[str] = typer.Option(None, help=f"Comma-separated subset of {config.ALL_SOURCES}"),
     skip_fetch: bool = typer.Option(False, "--skip-fetch", help="Skip paper fetching"),
     skip_email: bool = typer.Option(False, "--skip-email", help="Skip email notification"),
-    skip_readme: bool = typer.Option(False, "--skip-readme", help="Skip README update"),
+    skip_readme: bool = typer.Option(False, "--skip-readme", help="Skip README / topic page generation"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
-    """Run the full pipeline: fetch → categorize → merge → README → email."""
+    """Fetch -> filter -> merge -> categorize -> save -> README -> email."""
     _setup_logging(verbose)
-    console.print("[bold blue]Running full pipeline...[/]\n")
-
     result = run_pipeline(
-        skip_fetch=skip_fetch,
-        skip_email=skip_email,
-        skip_readme=skip_readme,
+        skip_fetch=skip_fetch, skip_email=skip_email, skip_readme=skip_readme,
+        since=since, backfill=backfill, sources=_sources(sources),
     )
+    _report(result)
+    _exit_if_fetch_failed(result)
 
-    if result["success"]:
-        console.print(f"\n[bold green]Pipeline completed![/]")
-        console.print(f"  Existing papers: {result.get('existing_count', 0)}")
-        console.print(f"  Fetched: {result.get('fetched_count', 0)}")
-        console.print(f"  New papers: {result.get('new_count', 0)}")
-        console.print(f"  Total: {result.get('total_count', 0)}")
-    else:
-        console.print("[red]Pipeline failed. Check logs for details.[/]")
-        raise typer.Exit(1)
+
+@app.command()
+def fetch(
+    since: Optional[str] = typer.Option(None, help="Only fetch papers published since YYYY-MM-DD"),
+    backfill: bool = typer.Option(False, "--backfill", help="Relevance-ranked search across all years"),
+    sources: Optional[str] = typer.Option(None, help=f"Comma-separated subset of {config.ALL_SOURCES}"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Fetch and store new papers without touching README or email."""
+    _setup_logging(verbose)
+    result = run_pipeline(skip_email=True, skip_readme=True, since=since, backfill=backfill, sources=_sources(sources))
+    _report(result)
+    _exit_if_fetch_failed(result)
+
+
+@app.command()
+def rebuild(verbose: bool = typer.Option(False, "--verbose", "-v")) -> None:
+    """Re-score, deduplicate and re-categorize the stored database (after editing config.py)."""
+    _setup_logging(verbose)
+    papers = load_papers()
+    merged = PaperIndex(papers).papers
+    for p in merged:
+        p.setdefault("first_seen", (p.get("fetched_at") or "")[:10])
+    kept, pruned = refresh_annotations(merged)
+    save_papers(kept)
+    write_outputs(kept, last_new_papers(kept))
+    console.print(f"[green]Rebuilt database: {len(kept)} papers kept, {len(papers) - len(merged)} duplicates merged, "
+                  f"{len(pruned)} pruned.[/]")
+
+
+@app.command(name="update-readme")
+def update_readme(verbose: bool = typer.Option(False, "--verbose", "-v")) -> None:
+    """Regenerate README.md and docs/papers/*.md from the database."""
+    _setup_logging(verbose)
+    papers = load_papers()
+    written = write_outputs(papers, last_new_papers(papers))
+    console.print(f"[green]README.md and {len(written) - 1} topic pages updated ({len(papers)} papers).[/]")
+
+
+@app.command()
+def stats(verbose: bool = typer.Option(False, "--verbose", "-v")) -> None:
+    """Show database statistics."""
+    _setup_logging(verbose)
+    papers = _require_papers()
+    s = get_statistics(papers)
+    console.print(f"\n[bold]{s['total_papers']} papers[/] · {s['ml_papers']} AI/ML · {s['preprints']} preprints\n")
+
+    table = Table(title="Papers by year")
+    table.add_column("Year", style="cyan")
+    table.add_column("Count", justify="right", style="green")
+    table.add_column("")
+    peak = max(s["by_year"].values() or [1])
+    for year, count in list(s["by_year"].items())[:15]:
+        table.add_row(str(year), str(count), "█" * max(1, round(count / peak * 40)))
+    console.print(table)
+
+    for title, data in (("Track", {track_label(k): v for k, v in s["by_track"].items()}),
+                        ("Topic", s["by_category"]), ("Architecture", s["by_method"]), ("Source", s["by_source"])):
+        table = Table(title=f"Papers by {title.lower()}")
+        table.add_column(title, style="cyan")
+        table.add_column("Count", justify="right", style="green")
+        for k, v in data.items():
+            table.add_row(k, str(v))
+        console.print(table)
+
+
+@app.command()
+def search(
+    query: str = typer.Argument(..., help='Search terms (AND); quote phrases, e.g. \'"loop extrusion" polymer\''),
+    limit: int = typer.Option(20, "--limit", "-n", help="Max results"),
+    ml_only: bool = typer.Option(False, "--ml", help="Only AI/ML papers"),
+) -> None:
+    """Search the local database."""
+    papers = _require_papers()
+    if ml_only:
+        papers = [p for p in papers if p.get("track") == "ml"]
+    results = search_papers(papers, query, limit=limit)
+    if not results:
+        console.print(f"[yellow]No papers matching '{query}'[/]")
+        return
+    console.print(f"\n[bold]{len(results)} papers matching '{query}':[/]\n")
+    for p in results:
+        console.print(f"  [bold]{p['title']}[/]")
+        console.print(f"  {short_authors(p.get('authors') or [])} | {p.get('journal', '')} ({p.get('date') or p.get('year')})")
+        console.print(f"  {track_label(p.get('track', ''))} · relevance {p.get('relevance')} · {', '.join(p.get('categories') or [])}")
+        console.print(f"  {p.get('url', '')}\n")
 
 
 @app.command()
 def export(
-    format: str = typer.Option("json", "--format", "-f", help="Export format: json, csv"),
+    format: str = typer.Option("json", "--format", "-f", help="json, csv or bib"),
     output: str = typer.Option("papers_export", "--output", "-o", help="Output filename (without extension)"),
-    verbose: bool = typer.Option(False, "--verbose", "-v"),
+    ml_only: bool = typer.Option(False, "--ml", help="Only AI/ML papers"),
 ) -> None:
-    """Export the paper database to JSON or CSV."""
-    _setup_logging(verbose)
-    papers = load_papers()
-    if not papers:
-        console.print("[red]No papers in database.[/]")
-        raise typer.Exit(1)
-
+    """Export the database to JSON, CSV or BibTeX."""
+    papers = _require_papers()
+    if ml_only:
+        papers = [p for p in papers if p.get("track") == "ml"]
     if format == "json":
-        out_path = f"{output}.json"
-        with open(out_path, "w", encoding="utf-8") as f:
-            json.dump(papers, f, ensure_ascii=False, indent=2)
+        text, ext = json.dumps(papers, ensure_ascii=False, indent=1), "json"
     elif format == "csv":
-        import csv
-
-        out_path = f"{output}.csv"
-        fields = ["id", "title", "authors", "journal", "year", "date", "doi", "url", "source", "categories"]
-        with open(out_path, "w", encoding="utf-8", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
-            writer.writeheader()
-            for p in papers:
-                row = {**p}
-                row["authors"] = "; ".join(p.get("authors", []))
-                row["categories"] = "; ".join(p.get("categories", []))
-                writer.writerow(row)
+        text, ext = to_csv(papers), "csv"
+    elif format in ("bib", "bibtex"):
+        text, ext = to_bibtex(papers), "bib"
     else:
         console.print(f"[red]Unknown format: {format}[/]")
         raise typer.Exit(1)
-
+    out_path = Path(f"{output}.{ext}")
+    out_path.write_text(text, encoding="utf-8")
     console.print(f"[green]Exported {len(papers)} papers to {out_path}[/]")
 
 
+@app.command()
+def analyze() -> None:
+    """Print the research-landscape summary."""
+    console.print(analyze_papers(_require_papers())["research_summary"])
+
+
 @app.command(name="send-email")
-def send_email_cmd(
-    verbose: bool = typer.Option(False, "--verbose", "-v"),
-) -> None:
-    """Send email digest with the latest new papers."""
+def send_email_cmd(verbose: bool = typer.Option(False, "--verbose", "-v")) -> None:
+    """Email the digest of papers added by the last update."""
     _setup_logging(verbose)
     from .email_notifier import send_digest_email
 
-    all_papers = load_papers()
-    new_papers = load_papers(config.NEW_PAPERS_JSON)
-
-    if not new_papers:
-        console.print("[yellow]No new papers to report.[/]")
+    papers = _require_papers()
+    new = last_new_papers(papers)
+    if not new:
+        console.print("[yellow]No new papers from the last update.[/]")
         return
-
-    categorize_papers(all_papers)
-    categorize_papers(new_papers)
-    digest = generate_digest(new_papers, all_papers)
-
-    sent = send_digest_email(new_papers, digest)
-    if sent:
-        console.print("[green]Email digest sent successfully![/]")
+    if send_digest_email(new, generate_digest(new, papers)):
+        console.print("[green]Email digest sent.[/]")
     else:
-        console.print("[red]Failed to send email. Check configuration.[/]")
+        console.print("[red]Failed to send email. Check SMTP configuration.[/]")
+        raise typer.Exit(1)
+
+
+@app.command()
+def serve(
+    port: int = typer.Option(config.WEB_PORT, help="Port"),
+    host: str = typer.Option(config.WEB_HOST, help="Bind address"),
+    no_browser: bool = typer.Option(False, "--no-browser", help="Do not open a browser"),
+) -> None:
+    """Start the web GUI."""
+    from .web_app import start_server
+
+    start_server(port=port, open_browser=not no_browser, host=host)
+
+
+@app.command()
+def version() -> None:
+    """Print the version."""
+    console.print(__version__)
 
 
 def main() -> None:

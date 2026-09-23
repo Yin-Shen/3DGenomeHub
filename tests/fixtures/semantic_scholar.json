@@ -1,0 +1,15 @@
+{
+  "total": 2, "offset": 0,
+  "data": [
+    {"paperId": "abc123", "title": "Predicting 3D Genome Folding from DNA Sequence with a Convolutional Neural Network",
+     "abstract": null, "year": 2024, "venue": "Nature Methods", "publicationDate": "2024-02-15",
+     "externalIds": {"DOI": "10.1000/TEST.3DGENOME.2024", "PubMed": "39000001"},
+     "citationCount": 57, "publicationTypes": ["JournalArticle"], "journal": {"name": "Nature Methods"},
+     "openAccessPdf": null, "authors": [{"authorId": "1", "name": "Jane Doe"}], "url": "https://www.semanticscholar.org/paper/abc123"},
+    {"paperId": "def456", "title": "TAD boundary prediction with transformer models",
+     "abstract": "Topologically associating domain (TAD) boundaries are predicted from sequence and CTCF binding with a transformer.",
+     "year": 2025, "venue": "arXiv.org", "publicationDate": "2025-03-02",
+     "externalIds": {"ArXiv": "2503.00999"}, "citationCount": 3, "publicationTypes": null, "journal": null,
+     "openAccessPdf": {"url": "https://arxiv.org/pdf/2503.00999"}, "authors": [{"name": "R. Kumar"}], "url": "https://www.semanticscholar.org/paper/def456"}
+  ]
+}

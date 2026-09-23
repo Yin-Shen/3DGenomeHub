@@ -1,0 +1,9 @@
+{
+  "messages": [{"status": "ok", "interval": "2025-01-01:2025-01-31", "cursor": 0, "count": 4, "count_new_papers": "4", "total": "4"}],
+  "collection": [
+    {"doi": "10.1101/2025.01.10.632001", "title": "Graph neural networks predict enhancer-promoter interactions from Micro-C maps", "authors": "Chen, L.; Garcia, M.; Okafor, N.", "author_corresponding": "Chen L", "author_corresponding_institution": "Somewhere", "date": "2025-01-10", "version": "1", "type": "new results", "license": "cc_by", "category": "bioinformatics", "jatsxml": "", "abstract": "Enhancer-promoter interactions shape gene regulation. We develop a graph neural network using Micro-C chromatin contacts.", "published": "NA", "server": "bioRxiv"},
+    {"doi": "10.1101/2025.01.10.632001", "title": "Graph neural networks predict enhancer-promoter interactions from Micro-C maps", "authors": "Chen, L.; Garcia, M.; Okafor, N.", "date": "2025-01-20", "version": "2", "type": "new results", "category": "bioinformatics", "abstract": "Enhancer-promoter interactions shape gene regulation. We develop a graph neural network using Micro-C chromatin contacts (revised).", "published": "NA", "server": "bioRxiv"},
+    {"doi": "10.1101/2025.01.11.600000", "title": "Neural circuits of fear memory in mice", "authors": "Park, S.", "date": "2025-01-11", "version": "1", "category": "neuroscience", "abstract": "Hi-C is not involved here; we study amygdala circuits.", "published": "NA", "server": "bioRxiv"},
+    {"doi": "10.1101/2025.01.12.611111", "title": "Transcription factor dynamics in yeast", "authors": "Ito, K.", "date": "2025-01-12", "version": "1", "category": "genomics", "abstract": "We measure transcription factor occupancy with ChIP-seq.", "published": "NA", "server": "bioRxiv"}
+  ]
+}

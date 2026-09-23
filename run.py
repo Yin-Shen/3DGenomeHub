@@ -2,46 +2,41 @@
 """
 3D Genome & Deep Learning Literature Hub
 =========================================
-One-click launcher — double-click this file or run: python run.py
+One-click launcher: double-click this file or run ``python run.py``.
 
-Features:
-  - Auto-fetch papers from PubMed, bioRxiv, arXiv
-  - Categorize papers into research topics
-  - Auto-update README.md
-  - Send email digests
-  - Beautiful web GUI at http://localhost:8686
+Installs missing dependencies on first run, then opens the web GUI at
+http://localhost:8686 (search, filters, landscape analysis, one-click updates).
 """
 
 import os
 import subprocess
 import sys
 
+ROOT = os.path.dirname(os.path.abspath(__file__))
 
-def check_dependencies():
-    """Install dependencies if missing."""
+
+def check_dependencies() -> None:
     try:
-        import httpx
-        import typer
-        import rich
-        import jinja2
-        import dotenv
+        import dotenv  # noqa: F401
+        import httpx  # noqa: F401
+        import jinja2  # noqa: F401
+        import rich  # noqa: F401
+        import typer  # noqa: F401
     except ImportError:
         print("Installing dependencies...")
-        req_file = os.path.join(os.path.dirname(__file__), "requirements.txt")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", req_file])
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", os.path.join(ROOT, "requirements.txt")])
         print("Dependencies installed!\n")
 
 
-def main():
-    # Ensure src is in path
-    src_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src")
+def main() -> None:
+    src_dir = os.path.join(ROOT, "src")
     if src_dir not in sys.path:
         sys.path.insert(0, src_dir)
-
     check_dependencies()
 
     from genome_literature.web_app import start_server
-    start_server(port=8686, open_browser=True)
+
+    start_server(open_browser=True)
 
 
 if __name__ == "__main__":

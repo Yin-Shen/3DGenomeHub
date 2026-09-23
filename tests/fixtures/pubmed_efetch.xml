@@ -1,0 +1,77 @@
+<?xml version="1.0" ?>
+<!DOCTYPE PubmedArticleSet PUBLIC "-//NLM//DTD PubMedArticle, 1st January 2024//EN" "https://dtd.nlm.nih.gov/ncbi/pubmed/out/pubmed_240101.dtd">
+<PubmedArticleSet>
+<PubmedArticle>
+  <MedlineCitation Status="MEDLINE" Owner="NLM">
+    <PMID Version="1">39000001</PMID>
+    <Article PubModel="Print-Electronic">
+      <Journal>
+        <JournalIssue CitedMedium="Internet">
+          <PubDate><Year>2024</Year><Month>Mar</Month></PubDate>
+        </JournalIssue>
+        <Title>Nature methods</Title>
+      </Journal>
+      <ArticleTitle>Predicting <i>3D genome</i> folding from DNA sequence with a convolutional neural network.</ArticleTitle>
+      <ELocationID EIdType="doi" ValidYN="Y">10.1000/elocation-only</ELocationID>
+      <Abstract>
+        <AbstractText Label="BACKGROUND" NlmCategory="BACKGROUND">Hi-C contact maps reveal topologically associating domains (TADs) and chromatin loops.</AbstractText>
+        <AbstractText Label="RESULTS" NlmCategory="RESULTS">We present a deep learning model that predicts contact maps from DNA sequence alone and enables in silico mutagenesis of CTCF sites.</AbstractText>
+      </Abstract>
+      <AuthorList CompleteYN="Y">
+        <Author ValidYN="Y"><LastName>Doe</LastName><ForeName>Jane</ForeName></Author>
+        <Author ValidYN="Y"><LastName>Roe</LastName><ForeName>Richard</ForeName></Author>
+        <Author ValidYN="Y"><CollectiveName>4D Nucleome Consortium</CollectiveName></Author>
+      </AuthorList>
+      <PublicationTypeList><PublicationType UI="D016428">Journal Article</PublicationType></PublicationTypeList>
+      <ArticleDate DateType="Electronic"><Year>2024</Year><Month>02</Month><Day>15</Day></ArticleDate>
+    </Article>
+    <KeywordList Owner="NOTNLM"><Keyword MajorTopicYN="N">Hi-C</Keyword><Keyword MajorTopicYN="N">deep learning</Keyword></KeywordList>
+  </MedlineCitation>
+  <PubmedData>
+    <History><PubMedPubDate PubStatus="pubmed"><Year>2024</Year><Month>2</Month><Day>16</Day></PubMedPubDate></History>
+    <ArticleIdList>
+      <ArticleId IdType="pubmed">39000001</ArticleId>
+      <ArticleId IdType="doi">10.1000/Test.3DGenome.2024</ArticleId>
+      <ArticleId IdType="pmc">PMC1234567</ArticleId>
+    </ArticleIdList>
+    <ReferenceList><Reference><ArticleIdList><ArticleId IdType="doi">10.9999/reference-doi</ArticleId></ArticleIdList></Reference></ReferenceList>
+  </PubmedData>
+</PubmedArticle>
+<PubmedArticle>
+  <MedlineCitation Status="MEDLINE" Owner="NLM">
+    <PMID Version="1">39000002</PMID>
+    <Article PubModel="Print">
+      <Journal>
+        <JournalIssue CitedMedium="Print"><PubDate><MedlineDate>2023 Nov-Dec</MedlineDate></PubDate></JournalIssue>
+        <Title>Genome research</Title>
+      </Journal>
+      <ArticleTitle>Chromosome-level genome assembly of the giant panda using Hi-C scaffolding.</ArticleTitle>
+      <Abstract><AbstractText>We generated a chromosome-level genome assembly using Hi-C data for scaffolding.</AbstractText></Abstract>
+      <AuthorList><Author><LastName>Smith</LastName><Initials>A</Initials></Author></AuthorList>
+      <PublicationTypeList><PublicationType>Journal Article</PublicationType></PublicationTypeList>
+    </Article>
+  </MedlineCitation>
+  <PubmedData>
+    <ArticleIdList>
+      <ArticleId IdType="pubmed">39000002</ArticleId>
+    </ArticleIdList>
+    <ReferenceList><Reference><ArticleIdList><ArticleId IdType="doi">10.9999/should-not-be-used</ArticleId></ArticleIdList></Reference></ReferenceList>
+  </PubmedData>
+</PubmedArticle>
+<PubmedArticle>
+  <MedlineCitation Status="MEDLINE" Owner="NLM">
+    <PMID Version="1">39000003</PMID>
+    <Article PubModel="Print">
+      <Journal>
+        <JournalIssue CitedMedium="Print"><PubDate><Year>2022</Year><Season>Winter</Season></PubDate></JournalIssue>
+        <Title>Briefings in bioinformatics</Title>
+      </Journal>
+      <ArticleTitle>Deep learning for 3D genome organization: a review.</ArticleTitle>
+      <Abstract><AbstractText>We review neural network approaches for Hi-C enhancement, chromatin loop prediction and TAD calling.</AbstractText></Abstract>
+      <AuthorList><Author><LastName>Lee</LastName><ForeName>Min</ForeName></Author></AuthorList>
+      <PublicationTypeList><PublicationType>Journal Article</PublicationType><PublicationType>Review</PublicationType></PublicationTypeList>
+    </Article>
+  </MedlineCitation>
+  <PubmedData><ArticleIdList><ArticleId IdType="pubmed">39000003</ArticleId></ArticleIdList></PubmedData>
+</PubmedArticle>
+</PubmedArticleSet>
