@@ -5,7 +5,8 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Any
+from contextlib import contextmanager
+from typing import Any, Iterator
 from urllib.parse import urlparse
 
 import httpx
@@ -74,6 +75,13 @@ class HttpClient:
 
     def post(self, url: str, **kwargs: Any) -> httpx.Response:
         return self.request("POST", url, **kwargs)
+
+    @contextmanager
+    def stream(self, method: str, url: str, **kwargs: Any) -> Iterator[httpx.Response]:
+        """Streaming request (no automatic retry; the caller inspects the status code)."""
+        self._throttle(urlparse(url).netloc)
+        with self._client.stream(method, url, **kwargs) as resp:
+            yield resp
 
 
 def _retry_after(resp: httpx.Response) -> float | None:

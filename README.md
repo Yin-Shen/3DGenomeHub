@@ -4,17 +4,193 @@
 
 > An automatically updated, relevance-filtered index of research on **3D genome organization** (Hi-C, Micro-C, TADs, loops, compartments, single-cell and imaging methods), with a focus on **deep learning and machine learning** methods.
 
-![Last updated](https://img.shields.io/badge/Last%20updated-2026--09--23-blue) ![Papers](https://img.shields.io/badge/Papers-0-green) ![AI/ML papers](https://img.shields.io/badge/AI%2FML%20papers-0-purple) ![Auto update](https://img.shields.io/badge/Auto%20update-weekly-brightgreen)
+![Last updated](https://img.shields.io/badge/Last%20updated-2026--09--24-blue) ![Papers](https://img.shields.io/badge/Papers-3539-green) ![AI/ML papers](https://img.shields.io/badge/AI%2FML%20papers-521-purple) ![Auto update](https://img.shields.io/badge/Auto%20update-weekly-brightgreen)
+
+**[Latest papers](#latest-papers)** · **[Browse by topic](#browse-by-topic)** · **[Most-cited AI/ML papers](#most-cited-aiml-papers)** · **[Statistics](#statistics)** · **[Usage](#usage)**
 
 ## Latest papers
 
-_The database is empty. Run `python run.py` (web GUI) or `PYTHONPATH=src python -m genome_literature run-pipeline` to build it; the weekly GitHub Actions workflow populates it automatically._
+_Last update added **45** papers (2 AI/ML)._ Full lists: [all AI/ML × 3D genome papers](docs/papers/ai-ml-3d-genome.md) · [by topic](#browse-by-topic).
+
+### AI / ML methods
+
+| Date | Paper | Venue | Topics |
+|---|---|---|---|
+| 2026-09-30 | **[Predicting the Structural Impact of Genetic Variants on 3D Genome Architecture Chromatin Interaction](https://doi.org/10.22214/ijraset.2026.84856)**<br><sub>Rajesh Dr. T. et al. · `Tree Ensembles` `Classical ML`</sub> | International Journal for Research in Applied Science and Engineering Technology | Chromatin Loop & Interaction Prediction, Disease & Clinical Applications |
+| 2026-09-21 | **[Identification of differential topologically associating domains from low sequencing depth and pseudobulk chromatin contact maps](https://doi.org/10.1101/gr.281535.125)**<br><sub>Li Junping et al. · `Transformer / Attention` `GNN`</sub> | Genome research | TAD & Compartment Detection, Disease & Clinical Applications |
+| 2026-09-18 | **[Machine learning reveals sequence and genomic context features underlying Alu -specific effects on genome folding](https://doi.org/10.64898/2026.09.16.752217)**<br><sub>Zhang S, Pollard KS · `preprint`</sub> | bioRxiv (preprint) | Epigenomics & Sequence-based Prediction, Chromatin Loop & Interaction Prediction |
+| 2026-09-08 | **[Overcoming artificial structures in resolution-enhanced Hi-C data by signal decomposition and multi-scale attention](https://doi.org/10.1002/advs.202524180)**<br><sub>Li Qinyao et al. · `Transformer / Attention`</sub> | Advanced science (Weinheim, Baden-Wurttemberg, Germany) | Hi-C Enhancement & Super-Resolution |
+| 2026-09-03 | **[Hi-cGAN: Prediction of Hi-C interaction matrices with conditional generative adversarial networks](https://doi.org/10.64898/2026.08.30.748103)**<br><sub>Krauth R et al. · `GAN` `preprint`</sub> | bioRxiv (preprint) | Epigenomics & Sequence-based Prediction, Generative & Foundation Models |
+| 2026-09-03 | **[DeepCNet: A multimodal deep learning model for predicting cell type-specific gene expression and promoter-enhancer interactions from single-cell multiome data](https://doi.org/10.21203/rs.3.rs-8716015/v1)**<br><sub>Chen L et al. · `preprint`</sub> | Research Square (preprint) | Multi-omics Integration, Chromatin Loop & Interaction Prediction |
+| 2026-09-02 | **[3D epigenome of glial cell types in developing human cortex](https://doi.org/10.1038/s41586-026-10987-6)**<br><sub>Jones Ian R et al.</sub> | Nature | Multi-omics Integration, Epigenomics & Sequence-based Prediction |
+| 2026-08-28 | **[Hi-Cformer enables multiscale chromatin contact map modeling for single-cell Hi-C data analysis](https://doi.org/10.1126/sciadv.aeg0134)**<br><sub>Wu Xiaoqing et al. · `Transformer / Attention`</sub> | Science advances | Single-cell 3D Genomics, TAD & Compartment Detection |
+| 2026-08-26 | **[Architectural logic of the 3D genome: mechanisms of dysregulation and emerging cancer therapeutics](https://doi.org/10.1101/gad.353831.126)**<br><sub>Smith RG et al.</sub> | Genes & development | Disease & Clinical Applications, Epigenomics & Sequence-based Prediction |
+| 2026-08-26 | **[Deep Learning for Deciphering the Plant Cis-Regulatory Code](https://doi.org/10.3390/plants15172603)**<br><sub>Zhao Z et al. · `Transformer / Attention` `Language / Foundation Model` `Transfer Learning`</sub> | Plants (Basel, Switzerland) | Generative & Foundation Models, Multi-omics Integration |
+| 2026-08-19 | **[HiFiC-G: Adapting HiFiC for Hi-C Contact Matrices](https://arxiv.org/abs/2608.21446)**<br><sub>Andre Antonio Straton · `GAN` `Transfer Learning` `preprint`</sub> | arXiv (preprint) | TAD & Compartment Detection, Generative & Foundation Models |
+| 2026-08-16 | **[Functional genomic dissection and prediction of body size traits in pigs](https://doi.org/10.1186/s12711-026-01078-1)**<br><sub>Yu Naibiao et al.</sub> | Genetics, selection, evolution : GSE | Multi-omics Integration, Disease & Clinical Applications |
+| 2026-08-14 | **[AI4Loop: an Artificial Intelligence Framework Reveals Increased 3D Chromatin Interactions and Therapeutic Vulnerabilities across 12,000 Cancer Samples](https://doi.org/10.64898/2026.08.12.744314)**<br><sub>Dao F et al. · `preprint`</sub> | bioRxiv (preprint) | Disease & Clinical Applications, Chromatin Loop & Interaction Prediction |
+| 2026-08-14 | **[Integrating heterogeneity into topologically associating domain boundary prediction in large genomic context in human](https://doi.org/10.1093/nargab/lqag092)**<br><sub>Sun Ying et al.</sub> | NAR genomics and bioinformatics | TAD & Compartment Detection |
+| 2026-08-12 | **[Enhancer collapse dictates PKHD1 silencing and centrosome-mediated chromosomal instability and metastasis in clear cell renal cell carcinoma](https://doi.org/10.1016/j.yexcr.2026.115150)**<br><sub>Wang Yueyang et al.</sub> | Experimental cell research | TAD & Compartment Detection, Disease & Clinical Applications |
+| 2026-08-01 | **[Chiron3D: an interpretable deep learning framework for understanding the DNA code of chromatin looping](https://doi.org/10.1093/bioinformatics/btag492)**<br><sub>Hönig Sebastian et al. · `Language / Foundation Model` `Transfer Learning`</sub> | Bioinformatics (Oxford, England) | CTCF, Cohesin & Loop Extrusion, Generative & Foundation Models |
+| 2026-07-23 | **[Single-cell multiomics connects 3D genome and transcriptome alterations in Alzheimer's disease](https://doi.org/10.1126/science.adz1652)**<br><sub>Zhang Yang et al.</sub> | Science (New York, N.Y.) | Multi-omics Integration |
+| 2026-07-23 | **[HiC2Self: Self-supervised denoising for bulk and single-cell Hi-C contact maps](https://doi.org/10.1126/sciadv.adu8060)**<br><sub>Yang Rui et al. · `Contrastive / Self-supervised`</sub> | Science advances | Single-cell 3D Genomics, Hi-C Enhancement & Super-Resolution |
+| 2026-07-23 | **[Single-cell analysis of the epigenome and 3D chromatin architecture in the human retina](https://doi.org/10.1126/sciadv.adv9162)**<br><sub>Yuan Ying et al.</sub> | Science advances | Multi-omics Integration, Single-cell 3D Genomics |
+| 2026-07-18 | **[scWeave: A deep learning model that bidirectionally translates between gene expression and chromatin structure at single-cell resolution](https://doi.org/10.64898/2026.07.13.738265)**<br><sub>Murtaza Ghulam et al. · `Autoencoder / VAE` `preprint`</sub> | bioRxiv : the preprint server for biology | Single-cell 3D Genomics |
+
+### Other 3D genome methods & biology
+
+| Date | Paper | Venue | Topics |
+|---|---|---|---|
+| 2026-09-23 | **[Identification of Genome-Wide Chromatin Structural Aberration in Cancer by Hi-C Analysis](https://doi.org/10.1007/978-1-0716-5539-9_17)**<br><sub>Isogai Shuntaro et al.</sub> | Methods in molecular biology (Clifton, N.J.) | Disease & Clinical Applications, Experimental Methods & Technologies |
+| 2026-09-22 | **[Regulatory-scale stripe analysis from single-cell Hi-C with scStripe](https://doi.org/10.64898/2026.09.16.751930)**<br><sub>Li L et al. · `preprint`</sub> | bioRxiv (preprint) | Single-cell 3D Genomics |
+| 2026-09-22 | **[A prostate cancer-specific super-enhancer at 1q42.3 regulates the CAPN2 and KRT19](https://doi.org/10.1016/j.jbc.2026.113588)**<br><sub>Zhao Zhenhao et al.</sub> | The Journal of biological chemistry | Disease & Clinical Applications, Multi-omics Integration |
+| 2026-09-21 | **[Genomic imprinting of the metabolic regulator gene Klf14 is regulated by a paternal sub-TAD anchored at Mest](https://doi.org/10.1101/gad.353948.126)**<br><sub>Ha A et al.</sub> | Genes & development | TAD & Compartment Detection |
+| 2026-09-20 | **[Identifying Putative Pathogenic Non-Coding Variants in Unresolved Rare Disease Patients Using Topologically Associated Domains](https://doi.org/10.64898/2026.09.17.752339)**<br><sub>Gacita AM et al. · `preprint`</sub> | bioRxiv (preprint) | Disease & Clinical Applications, TAD & Compartment Detection |
+| 2026-09-18 | **[Stepwise reorganization of chromosome conformation and nuclear organization during stem cell differentiation](https://doi.org/10.64898/2026.09.16.752023)**<br><sub>Huo X et al. · `preprint`</sub> | bioRxiv (preprint) | Nuclear Organization & Architecture |
+| 2026-09-18 | **[LAWS-HiC: A Locally Adaptive Weighting and Screening (LAWS) Approach to Improve Detection of Long-Range Chromatin Interactions from Hi-C Data](https://doi.org/10.3390/mps9050135)**<br><sub>Ling-Bo Zhou et al.</sub> | Methods and Protocols | Chromatin Loop & Interaction Prediction, TAD & Compartment Detection |
+| 2026-09-18 | **[HisTrader identifies nucleosome-free regions within ChIP-based profiling of histone post-translational modifications](https://doi.org/10.1016/j.crmeth.2026.101607)**<br><sub>Kirbizakis Eftyhios et al.</sub> | Cell reports methods | Epigenomics & Sequence-based Prediction, Experimental Methods & Technologies |
+| 2026-09-17 | **[Epi-PoreC: a nanopore-based method for simultaneous profiling of chromatin conformation, DNA methylation, and chromatin accessibility](https://doi.org/10.64898/2026.09.15.751767)**<br><sub>McKinlay A et al. · `preprint`</sub> | bioRxiv (preprint) | Experimental Methods & Technologies, Multi-omics Integration |
+| 2026-09-17 | **[DiffDomain-Spectrum identifies structurally reorganized TADs from sparse aggregated single-cell Hi-C contact maps](https://doi.org/10.64898/2026.09.15.751728)**<br><sub>Zhu J et al. · `preprint`</sub> | bioRxiv (preprint) | Single-cell 3D Genomics |
+
+## Browse by topic
+
+| Topic | Papers | AI/ML | Since last year | Latest |
+|---|---:|---:|---:|---|
+| **[All AI/ML × 3D genome papers](docs/papers/ai-ml-3d-genome.md)** | 521 | 521 | 200 | 2026-09-30 |
+| [Hi-C Enhancement & Super-Resolution](docs/papers/hi-c-enhancement-super-resolution.md)<br><sub>Enhancing, denoising and imputing sparse or low-resolution Hi-C / Micro-C contact maps</sub> | 135 | 57 | 35 | 2026-09-08 |
+| [3D Structure Prediction](docs/papers/3d-structure-prediction.md)<br><sub>Reconstructing 3D chromosome / genome structures and structural ensembles</sub> | 348 | 43 | 80 | 2026-09-08 |
+| [TAD & Compartment Detection](docs/papers/tad-compartment-detection.md)<br><sub>Calling and predicting TADs, sub-TADs, domain boundaries and A/B (sub)compartments</sub> | 809 | 94 | 199 | 2026-09-21 |
+| [Chromatin Loop & Interaction Prediction](docs/papers/chromatin-loop-interaction-prediction.md)<br><sub>Detecting and predicting chromatin loops, enhancer-promoter and other long-range contacts</sub> | 1012 | 187 | 226 | 2026-09-30 |
+| [CTCF, Cohesin & Loop Extrusion](docs/papers/ctcf-cohesin-loop-extrusion.md)<br><sub>CTCF binding, cohesin / condensin dynamics and the loop-extrusion mechanism</sub> | 814 | 60 | 210 | 2026-09-18 |
+| [Epigenomics & Sequence-based Prediction](docs/papers/epigenomics-sequence-based-prediction.md)<br><sub>Predicting 3D contacts from DNA sequence and epigenomic features (Akita, Orca, C.Origami, ...)</sub> | 406 | 166 | 125 | 2026-09-30 |
+| [Single-cell 3D Genomics](docs/papers/single-cell-3d-genomics.md)<br><sub>Single-cell and single-nucleus 3D genome assays and their computational analysis</sub> | 352 | 65 | 106 | 2026-09-22 |
+| [Multi-omics Integration](docs/papers/multi-omics-integration.md)<br><sub>Integrating 3D genome data with transcriptomic, epigenomic and other modalities</sub> | 493 | 81 | 203 | 2026-09-22 |
+| [Generative & Foundation Models](docs/papers/generative-foundation-models.md)<br><sub>Generative models (GANs, VAEs, diffusion) and pre-trained foundation / language models</sub> | 61 | 57 | 35 | 2026-09-03 |
+| [Graph Neural Networks for Genomics](docs/papers/graph-neural-networks-for-genomics.md)<br><sub>Graph and hypergraph representations of chromatin contacts and GNN models</sub> | 41 | 30 | 11 | 2026-07-03 |
+| [Experimental Methods & Technologies](docs/papers/experimental-methods-technologies.md)<br><sub>3C-derived, ligation-free and imaging technologies and protocols for mapping genome structure</sub> | 474 | 39 | 95 | 2026-09-23 |
+| [Nuclear Organization & Architecture](docs/papers/nuclear-organization-architecture.md)<br><sub>Nuclear bodies, lamina, speckles, chromosome territories and radial genome positioning</sub> | 279 | 12 | 61 | 2026-09-18 |
+| [Phase Separation & Chromatin](docs/papers/phase-separation-chromatin.md)<br><sub>Biomolecular condensates and phase separation in chromatin organization</sub> | 80 | 2 | 33 | 2026-09-01 |
+| [Polymer Modeling & Simulation](docs/papers/polymer-modeling-simulation.md)<br><sub>Polymer physics models and molecular / Brownian dynamics simulations of chromatin</sub> | 324 | 20 | 80 | 2026-08-25 |
+| [Data Processing & Normalization](docs/papers/data-processing-normalization.md)<br><sub>Hi-C processing pipelines, normalization, reproducibility and differential analysis</sub> | 214 | 6 | 45 | 2026-09-18 |
+| [Visualization & Browsers](docs/papers/visualization-browsers.md)<br><sub>Genome browsers, visualization tools, portals and databases for 3D genome data</sub> | 172 | 8 | 26 | 2026-09-11 |
+| [Disease & Clinical Applications](docs/papers/disease-clinical-applications.md)<br><sub>3D genome alterations in cancer, developmental disorders and complex-trait genetics</sub> | 649 | 85 | 187 | 2026-09-30 |
+| [Evolution & Conservation](docs/papers/evolution-conservation.md)<br><sub>Evolutionary conservation and divergence of 3D genome organization across species</sub> | 180 | 20 | 52 | 2026-09-17 |
+| [Benchmark & Review](docs/papers/benchmark-review.md)<br><sub>Reviews, benchmarks, comparisons and perspectives on 3D genome methods</sub> | 459 | 46 | 102 | 2026-09-15 |
+| [Other 3D Genome](docs/papers/other-3d-genome.md)<br><sub></sub> | 92 | 9 | 19 | 2026-06-26 |
+
+## Most-cited AI/ML papers
+
+| Citations | Paper | Venue | Year |
+|---:|---|---|---|
+| 1233 | **[Effective gene expression prediction from sequence by integrating long-range interactions](https://doi.org/10.1038/s41592-021-01252-x)**<br><sub>Avsec Žiga et al. · `Transfer Learning`</sub> | Nature methods | 2021 |
+| 834 | **[Comprehensive functional genomic resource and integrative model for the human brain](https://doi.org/10.1126/science.aat8464)**<br><sub>Wang Daifeng et al. · </sub> | Science (New York, N.Y.) | 2018 |
+| 377 | **[Single-cell epigenomic analyses implicate candidate causal variants at inherited risk loci for Alzheimer's and Parkinson's diseases](https://doi.org/10.1038/s41588-020-00721-x)**<br><sub>Corces M Ryan et al. · </sub> | Nature genetics | 2020 |
+| 320 | **[Predicting 3D genome folding from DNA sequence with Akita](https://doi.org/10.1038/s41592-020-0958-x)**<br><sub>Fudenberg Geoff et al. · `CNN`</sub> | Nature methods | 2020 |
+| 303 | **[DNA methylation atlas of the mouse brain at single-cell resolution](https://doi.org/10.1038/s41586-020-03182-8)**<br><sub>Liu Hanqing et al. · </sub> | Nature | 2021 |
+| 226 | **[De novo prediction of human chromosome structures: Epigenetic marking patterns encode genome architecture](https://doi.org/10.1073/pnas.1714980114)**<br><sub>Di Pierro Michele et al. · </sub> | Proceedings of the National Academy of Sciences of the United States of America | 2017 |
+| 200 | **[DeepC: predicting 3D genome folding using megabase-scale transfer learning](https://doi.org/10.1038/s41592-020-0960-3)**<br><sub>Schwessinger Ron et al. · `Transfer Learning`</sub> | Nature methods | 2020 |
+| 175 | **[Sequence-based modeling of three-dimensional genome architecture from kilobase to chromosome scale](https://doi.org/10.1038/s41588-022-01065-4)**<br><sub>Zhou Jian · </sub> | Nature genetics | 2022 |
+| 165 | **[Enhancing Hi-C data resolution with deep convolutional neural network HiCPlus](https://doi.org/10.1038/s41467-018-03113-2)**<br><sub>Zhang Yan et al. · `CNN`</sub> | Nature communications | 2018 |
+| 163 | **[A supervised learning framework for chromatin loop detection in genome-wide contact maps](https://doi.org/10.1038/s41467-020-17239-9)**<br><sub>Salameh Tarik J et al. · `Tree Ensembles`</sub> | Nature communications | 2020 |
+| 154 | **[Revealing Hi-C subcompartments by imputing inter-chromosomal chromatin interactions](https://doi.org/10.1038/s41467-019-12954-4)**<br><sub>Xiong Kyle, Ma Jian · `Autoencoder / VAE`</sub> | Nature communications | 2019 |
+| 131 | **[Identifying enhancer-promoter interactions with neural network based on pre-trained DNA vectors and attention mechanism](https://doi.org/10.1093/bioinformatics/btz694)**<br><sub>Hong Zengyan et al. · `Transformer / Attention` `Transfer Learning`</sub> | Bioinformatics (Oxford, England) | 2020 |
+| 122 | **[Cell-type-specific prediction of 3D chromatin organization enables high-throughput in silico genetic screening](https://doi.org/10.1038/s41587-022-01612-8)**<br><sub>Tan J et al. · </sub> | Nature biotechnology | 2023 |
+| 117 | **[Predicting enhancer-promoter interaction from genomic sequence with deep neural networks](https://doi.org/10.1007/s40484-019-0154-0)**<br><sub>Singh Shashank et al. · </sub> | Quantitative biology (Beijing, China) | 2019 |
+| 114 | **[Stratification of TAD boundaries reveals preferential insulation of super-enhancers by strong boundaries](https://doi.org/10.1038/s41467-018-03017-1)**<br><sub>Gong Yixiao et al. · </sub> | Nature communications | 2018 |
+| 111 | **[DeepTACT: predicting 3D chromatin contacts via bootstrapping deep learning](https://doi.org/10.1093/nar/gkz167)**<br><sub>Li Wenran et al. · </sub> | Nucleic acids research | 2019 |
+| 109 | **[Three-dimensional genome rewiring in loci with human accelerated regions](https://doi.org/10.1126/science.abm1696)**<br><sub>Keough Kathleen C et al. · </sub> | Science (New York, N.Y.) | 2023 |
+| 107 | **[Avocado: a multi-scale deep tensor factorization method learns a latent representation of the human epigenome](https://doi.org/10.1186/s13059-020-01977-6)**<br><sub>Schreiber Jacob et al. · </sub> | Genome biology | 2020 |
+| 100 | **[EagleC: A deep-learning framework for detecting a full range of structural variations from bulk and single-cell contact maps](https://doi.org/10.1126/sciadv.abn9215)**<br><sub>Wang Xiaotao et al. · </sub> | Science advances | 2022 |
+| 96 | **[Predicting DNA Methylation State of CpG Dinucleotide Using Genome Topological Features and Deep Networks](https://doi.org/10.1038/srep19598)**<br><sub>Wang Yiheng et al. · `Autoencoder / VAE` `Classical ML`</sub> | Scientific reports | 2016 |
+
+## Landmark papers
+
+Hand-picked foundational papers (edit `papers/curated_dois.txt` to change this list).
+
+- **[Comprehensive mapping of long-range interactions reveals folding principles of the human genome](https://doi.org/10.1126/science.1181369)** — Lieberman-Aiden E et al.. *Science (New York, N.Y.)* (2009) 
+- **[Topological domains in mammalian genomes identified by analysis of chromatin interactions](https://doi.org/10.1038/nature11082)** — Dixon Jesse R et al.. *Nature* (2012) 
+- **[A 3D map of the human genome at kilobase resolution reveals principles of chromatin looping](https://doi.org/10.1016/j.cell.2014.11.021)** — Rao SS et al.. *Cell* (2014) 
+- **[HiC-Pro: an optimized and flexible pipeline for Hi-C data processing](https://doi.org/10.1186/s13059-015-0831-x)** — Servant Nicolas et al.. *Genome biology* (2015) 
+- **[TopDom: an efficient and deterministic method for identifying topological domains in genomes](https://doi.org/10.1093/nar/gkv1505)** — Shin Hanjun et al.. *Nucleic acids research* (2015) 
+- **[Enhancer-promoter interactions are encoded by complex genomic signatures on looping chromatin](https://doi.org/10.1038/ng.3539)** — Whalen Sean et al.. *Nature genetics* (2016) 
+- **[Juicer Provides a One-Click System for Analyzing Loop-Resolution Hi-C Experiments](https://doi.org/10.1016/j.cels.2016.07.002)** — Durand NC et al.. *Cell systems* (2016) 
+- **[Enhancing Hi-C data resolution with deep convolutional neural network HiCPlus](https://doi.org/10.1038/s41467-018-03113-2)** — Zhang Yan et al.. *Nature communications* (2018) `AI/ML` `CNN`
+- **[Three-dimensional genome structures of single diploid human cells](https://doi.org/10.1126/science.aat5641)** — Tan L et al.. *Science (New York, N.Y.)* (2018) 
+- **[HiCNN: a very deep convolutional neural network to better enhance the resolution of Hi-C data](https://doi.org/10.1093/bioinformatics/btz251)** — Liu Tong, Wang Zheng. *Bioinformatics (Oxford, England)* (2019) `AI/ML` `CNN`
+- **[OnTAD: hierarchical domain structure reveals the divergence of activity among TADs and boundaries](https://doi.org/10.1186/s13059-019-1893-y)** — An Lin et al.. *Genome biology* (2019) 
+- **[Robust single-cell Hi-C clustering by convolution- and random-walk-based imputation](https://doi.org/10.1073/pnas.1901423116)** — Zhou Jingtian et al.. *Proceedings of the National Academy of Sciences of the United States of America* (2019) 
+- **[hicGAN infers super resolution Hi-C data with generative adversarial networks](https://doi.org/10.1093/bioinformatics/btz317)** — Liu Qiao et al.. *Bioinformatics (Oxford, England)* (2019) `AI/ML` `GAN`
+- **[A supervised learning framework for chromatin loop detection in genome-wide contact maps](https://doi.org/10.1038/s41467-020-17239-9)** — Salameh Tarik J et al.. *Nature communications* (2020) `AI/ML` `Tree Ensembles`
+- **[Computer vision for pattern detection in chromosome contact maps](https://doi.org/10.1038/s41467-020-19562-7)** — Matthey-Doret C et al.. *Nature communications* (2020) 
+- **[Cooler: scalable storage for Hi-C data and other genomically labeled arrays](https://doi.org/10.1093/bioinformatics/btz540)** — Abdennur N, Mirny LA. *Bioinformatics (Oxford, England)* (2020) 
+- **[DeepC: predicting 3D genome folding using megabase-scale transfer learning](https://doi.org/10.1038/s41592-020-0960-3)** — Schwessinger Ron et al.. *Nature methods* (2020) `AI/ML` `Transfer Learning`
+- **[DeepHiC: A generative adversarial network for enhancing Hi-C data resolution](https://doi.org/10.1371/journal.pcbi.1007287)** — Hong Hao et al.. *PLoS computational biology* (2020) `AI/ML` `GAN`
+- **[Mustache: multi-scale detection of chromatin loops from Hi-C and Micro-C maps using scale-space representation](https://doi.org/10.1186/s13059-020-02167-0)** — Roayaei Ardakany A et al.. *Genome biology* (2020) 
+- **[Predicting 3D genome folding from DNA sequence with Akita](https://doi.org/10.1038/s41592-020-0958-x)** — Fudenberg Geoff et al.. *Nature methods* (2020) `AI/ML` `CNN`
+- **[Multiscale and integrative single-cell Hi-C analysis with Higashi](https://doi.org/10.1038/s41587-021-01034-y)** — Zhang Ruochi et al.. *Nature biotechnology* (2021) 
+- **[Sequence-based modeling of three-dimensional genome architecture from kilobase to chromosome scale](https://doi.org/10.1038/s41588-022-01065-4)** — Zhou Jian. *Nature genetics* (2022) `AI/ML`
+- **[Cell-type-specific prediction of 3D chromatin organization enables high-throughput in silico genetic screening](https://doi.org/10.1038/s41587-022-01612-8)** — Tan J et al.. *Nature biotechnology* (2023) `AI/ML`
+
+## Statistics
+
+**3539** papers · **521** AI/ML · **1390** other computational · **1628** experimental/biology · **740** preprints
+
+<details><summary>Papers per year</summary>
+
+| Year | All | AI/ML | |
+|---|---:|---:|---|
+| 2026 | 468 | 106 | ██████████████████████████████ |
+| 2025 | 439 | 94 | ████████████████████████████ |
+| 2024 | 335 | 66 | █████████████████████ |
+| 2023 | 340 | 60 | ██████████████████████ |
+| 2022 | 335 | 59 | █████████████████████ |
+| 2021 | 294 | 40 | ███████████████████ |
+| 2020 | 286 | 39 | ██████████████████ |
+| 2019 | 270 | 24 | █████████████████ |
+| 2018 | 218 | 19 | ██████████████ |
+| 2017 | 154 | 12 | ██████████ |
+| 2016 | 113 | 1 | ███████ |
+| 2015 | 101 | 0 | ██████ |
+
+</details>
+
+<details><summary>Deep-learning architectures</summary>
+
+| Architecture | Papers |
+|---|---:|
+| Transformer / Attention | 94 |
+| CNN | 78 |
+| Transfer Learning | 57 |
+| Tree Ensembles | 35 |
+| GNN | 33 |
+| Language / Foundation Model | 27 |
+| Autoencoder / VAE | 25 |
+| Classical ML | 21 |
+| GAN | 18 |
+| RNN / LSTM | 18 |
+| Diffusion Model | 10 |
+| Contrastive / Self-supervised | 7 |
+| Reinforcement Learning | 3 |
+
+</details>
+
+<details><summary>Sources</summary>
+
+| Database | Papers |
+|---|---:|
+| europepmc | 2960 |
+| pubmed | 2782 |
+| semantic_scholar | 309 |
+| crossref | 209 |
+| arxiv | 104 |
+
+</details>
 
 ## Usage
 
 **Web app** (Windows / macOS / Linux, Python 3.9+): `python run.py` — installs dependencies on first run and
-opens <http://localhost:8686> with search, filters, landscape analysis and one-click updates.
-On Windows, `build_exe.bat` builds a standalone `dist/3DGenomeHub.exe`.
+opens <http://localhost:8686>: search and filters, one-click updates, bilingual display and the AI reading
+assistant. On Windows, `build_exe.bat` builds a standalone `dist/3DGenomeHub.exe`.
 
 **Command line**
 
@@ -28,6 +204,11 @@ python -m genome_literature stats
 python -m genome_literature export --format bib   # json / csv / bib
 python -m genome_literature rebuild               # re-score and re-categorize after editing config.py
 python -m genome_literature serve                 # web GUI
+python -m genome_literature translate --ml -n 50  # academic Chinese translation (see below)
+python -m genome_literature translate-text "Title" "Abstract"
+python -m genome_literature ask "单细胞 Hi-C 数据增强有哪些深度学习方法？"
+python -m genome_literature ai review --query "loop extrusion cohesin" -n 40 -o review.md
+python -m genome_literature ai interpret --id 10.1038/s41592-020-0958-x
 ```
 
 **How papers are selected.** Topic queries (`SEARCH_TOPICS` in `config.py`) run against PubMed, Europe PMC
@@ -37,12 +218,29 @@ pass a weighted threshold, with penalties for look-alikes (Hi-C genome-assembly 
 maps, transactivation domains). Records are merged across databases by DOI, PMID, arXiv ID and normalized
 title, then tagged with an AI/ML track, architecture families (CNN, Transformer, GNN, …) and up to three topics.
 
+**AI reading assistant (AI 研读助手).** Enter a DeepSeek API key under **设置 AI** in the web app (saved to the
+local `.env` as `LLM_API_KEY`; `LLM_API_BASE` / `LLM_MODEL` / `LLM_REASONING_MODEL` select any OpenAI-compatible
+provider). Then use **AI 解读** on a paper (structured interpretation, from the open-access full text via Europe
+PMC or arXiv when available, otherwise from the abstract), add papers to the **研读清单** for multi-paper
+summaries, comparison tables, literature-review drafts and research-gap analysis, or open **AI 讨论** to ask
+questions about the reading list, the current filter results or the whole library (relevant papers are retrieved
+first). Answers must cite the supplied papers as [n]; citations are checked and the reference list is generated
+from the database. Every result is saved as Markdown in `ai_notes/` (**我的笔记**).
+
+**Chinese academic translation (中文学术翻译).** Uses the same model settings. Titles and
+abstracts are translated with a curated 3D-genome / deep-learning glossary at temperature 0; every result is
+checked automatically (acronyms, gene and tool names, numbers, glossary terms, completeness) and corrected once
+if needed. Translations that still fail a check are marked 译文待校对 for manual proofreading. Results are cached
+in `papers/translations.json`; set `"reviewed": true` on a corrected entry to lock it. In the web app use
+**中英对照**, **翻译本页** or the **中文翻译** button on a paper; `run-pipeline` translates new papers automatically.
+
 **Automation.** `.github/workflows/update.yml` runs every Monday, commits `papers/`, this README and
 `docs/papers/`, and emails a digest when SMTP secrets are set. Optional secrets: `NCBI_API_KEY`,
-`NCBI_EMAIL`, `SEMANTIC_SCHOLAR_API_KEY`, `SMTP_*`, `EMAIL_FROM`, `EMAIL_RECIPIENTS` (see `.env.example`).
+`NCBI_EMAIL`, `SEMANTIC_SCHOLAR_API_KEY`, `SMTP_*`, `EMAIL_FROM`, `EMAIL_RECIPIENTS`, `LLM_API_KEY`,
+`LLM_API_BASE`, `LLM_MODEL` (see `.env.example`); with an API key, new papers are translated automatically.
 
 Architecture notes: [docs/architecture.md](docs/architecture.md) · Landmark papers: `papers/curated_dois.txt`
 
 ---
 
-*Last updated 2026-09-23 · generated by [3DGenomeHub](https://github.com/Yin-Shen/3DGenomeHub)*
+*Last updated 2026-09-24 · generated by [3DGenomeHub](https://github.com/Yin-Shen/3DGenomeHub)*

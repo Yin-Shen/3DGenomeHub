@@ -27,5 +27,8 @@ genome-literature = "genome_literature.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+genome_literature = ["web/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

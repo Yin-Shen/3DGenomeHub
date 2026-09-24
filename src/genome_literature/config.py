@@ -14,6 +14,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 load_dotenv()
 
 # ---------------------------------------------------------------------------
@@ -24,6 +25,11 @@ PAPERS_DIR = PROJECT_ROOT / "papers"
 PAPERS_JSON = PAPERS_DIR / "papers.json"
 NEW_PAPERS_JSON = PAPERS_DIR / "new_papers.json"
 STATE_JSON = PAPERS_DIR / "state.json"
+TRANSLATIONS_JSON = PAPERS_DIR / "translations.json"
+AI_NOTES_DIR = PROJECT_ROOT / "ai_notes"
+CACHE_DIR = PROJECT_ROOT / ".cache"
+FULLTEXT_CACHE_DIR = CACHE_DIR / "fulltext"
+ENV_FILE = PROJECT_ROOT / ".env"
 CURATED_DOIS_FILE = PAPERS_DIR / "curated_dois.txt"
 TEMPLATE_DIR = PROJECT_ROOT / "templates"
 README_PATH = PROJECT_ROOT / "README.md"
@@ -55,14 +61,15 @@ MAX_RESULTS_PER_QUERY: dict[str, int] = {
     "crossref": 40,
 }
 BACKFILL_MAX_RESULTS_PER_QUERY: dict[str, int] = {
-    "pubmed": 400,
-    "europepmc": 400,
+    "pubmed": 1000,
+    "europepmc": 1000,
     "arxiv": 200,
     "semantic_scholar": 100,
     "crossref": 60,
 }
 INCREMENTAL_OVERLAP_DAYS = 7
 DEFAULT_LOOKBACK_DAYS = 30
+MAX_INCREMENTAL_LOOKBACK_DAYS = 120
 BIORXIV_BACKFILL_DAYS = 90
 BIORXIV_MAX_RECORDS = 20000
 BIORXIV_CATEGORIES = {
@@ -70,6 +77,8 @@ BIORXIV_CATEGORIES = {
     "biophysics", "systems biology", "synthetic biology", "developmental biology",
     "cancer biology", "evolutionary biology", "biochemistry",
 }
+
+SOURCE_FAILURE_LIMIT = 2
 
 HTTP_TIMEOUT = 45.0
 HTTP_MAX_RETRIES = 4
@@ -136,8 +145,8 @@ SEARCH_TOPICS: list[dict] = [
     {
         "name": "TAD & compartment calling",
         "groups": [
-            ["topologically associating domain", "topologically associated domain", "TAD boundary",
-             "TAD calling", "A/B compartment", "chromatin compartment", "domain boundary"],
+            ["topologically associating domain", "topologically associated domain", "topological domain",
+             "TAD boundary", "TAD calling", "A/B compartment", "chromatin compartment", "domain boundary"],
             M_COMP + M_DL + ["prediction", "detection", "identification", "calling"],
         ],
         "plain": ["TAD boundary prediction machine learning", "TAD calling algorithm Hi-C"],
@@ -145,8 +154,9 @@ SEARCH_TOPICS: list[dict] = [
     {
         "name": "Loops & chromatin interactions",
         "groups": [
-            ["chromatin loop", "loop calling", "loop detection", "chromatin interaction",
-             "enhancer-promoter interaction", "enhancer-promoter contact", "promoter-enhancer interaction"],
+            ["chromatin loop", "chromatin looping", "looping chromatin", "loop calling", "loop detection",
+             "chromatin interaction", "enhancer-promoter interaction", "enhancer-promoter contact",
+             "promoter-enhancer interaction"],
             M_COMP + M_DL + ["prediction", "detection"],
         ],
         "plain": ["chromatin loop detection deep learning", "enhancer-promoter interaction prediction deep learning"],
@@ -220,7 +230,7 @@ SEARCH_TOPICS: list[dict] = [
 # A paper enters the database only if it mentions at least one *core* 3D
 # genome term and (core + context - negative) reaches MIN_GENOME_SCORE.
 # Title hits count double.
-MIN_GENOME_SCORE = 4.5
+MIN_GENOME_SCORE = 6.0
 
 GENOME_CORE_TERMS: dict[str, float] = {
     "3D genome": 3, "3D genomic": 3, "three-dimensional genome": 3, "three-dimensional genomic": 3,
@@ -230,7 +240,8 @@ GENOME_CORE_TERMS: dict[str, float] = {
     "Micro-C": 3, "HiChIP": 3, "PLAC-seq": 3, "ChIA-PET": 3, "ChIA-Drop": 3,
     "Capture-C": 3, "4C-seq": 3, "Pore-C": 3, "SPRITE": 2, "genome architecture mapping": 3,
     "Dip-C": 3, "re:(?<![A-Za-z0-9])sc-?Hi-?C": 3, "sn-m3C-seq": 3, "snm3C-seq": 3,
-    "topologically associating domain": 3, "topologically associated domain": 3, "TAD": 2,
+    "topologically associating domain": 3, "topologically associated domain": 3, "topological domain": 3,
+    "TAD": 2, "looping chromatin": 3,
     "chromatin loop": 3, "chromatin looping": 3, "CTCF loop": 3, "loop extrusion": 3,
     "A/B compartment": 3, "chromatin compartment": 3,
     "genome folding": 3, "chromatin folding": 3, "chromosome folding": 3,
@@ -248,7 +259,9 @@ GENOME_CONTEXT_TERMS: dict[str, float] = {
     "genome organization": 2, "genome organisation": 2, "chromatin organization": 2,
     "chromatin organisation": 2, "nuclear organization": 1.5, "nuclear architecture": 1.5,
     "genome architecture": 1.5, "chromatin structure": 1.5, "chromosome structure": 1.5,
-    "long-range interaction": 1.5, "long-range regulation": 1, "DNA loop": 1, "DNA looping": 1,
+    "long-range interaction": 1.5, "long-range regulation": 1, "long-range regulatory": 1.5,
+    "DNA loop": 1, "DNA looping": 1, "higher-order chromatin": 2, "higher-order structure": 1,
+    "chromatin domain": 1.5, "chromatin nanodomain": 2, "3D regulatory": 2, "enhancer-gene": 1,
     "CTCF": 2, "cohesin": 1.5, "condensin": 1, "insulator": 1, "domain boundary": 1.5,
     "compartmentalization": 1, "LAD": 1, "nuclear lamina": 1.5, "nuclear speckle": 1,
     "phase separation": 0.5, "polymer model": 1.5, "polymer simulation": 1.5,
@@ -264,6 +277,8 @@ NEGATIVE_TERMS: dict[str, float] = {
     "protein structure prediction": 4, "protein folding": 3, "protein contact": 4,
     "residue contact": 3, "amino acid": 1.5, "hydrophobic interaction chromatography": 5,
     "re:3C-?like|3CL(?:pro)?": 3, "left anterior descending": 5, "coronary": 3,
+    "RNA-chromatin interaction": 4, "RNA-chromatin interactome": 4, "virus-host": 4, "host-virus": 4,
+    "synthetic community": 3, "microbial community": 3,
 }
 
 EXCLUDE_TITLE_PATTERN = (
@@ -381,9 +396,12 @@ CATEGORIES: dict[str, dict] = {
     "Hi-C Enhancement & Super-Resolution": {
         "description": "Enhancing, denoising and imputing sparse or low-resolution Hi-C / Micro-C contact maps",
         "terms": {
-            "super-resolution": 3, "resolution enhancement": 3, "Hi-C enhancement": 3,
+            "re:(?i)super-?resolution(?!\\s+(?:imaging|microscop\\w*|fluorescence|optical|STORM|PALM|chromatin imaging))": 3,
+            "resolution enhancement": 3, "Hi-C enhancement": 3, "fine-resolution": 2, "high-resolution Hi-C": 2,
+            "re:(?i)(?:denois\\w*|imput\\w*|enhanc\\w*|upsampl\\w*|super-?resolution|refin\\w*)\\s+(?:[\\w-]+\\s+){0,5}?(?:Hi-?C|contact\\s+(?:maps?|matri\\w+))": 3,
+            "re:(?i)(?:Hi-?C|contact\\s+(?:maps?|matri\\w+))\\s+(?:[\\w-]+\\s+){0,2}(?:denois\\w*|imput\\w*|enhancement|upsampl\\w*|super-?resolution)": 3,
             "re:(?i)enhanc\\w*\\s+(?:the\\s+)?(?:(?:spatial\\s+)?resolution|(?:sparse\\s+|low[\\s-]resolution\\s+)?Hi-?C|contact\\s+maps?)": 3,
-            "low-resolution": 2, "imputation": 2, "impute": 2, "imputing": 2, "denoising": 2, "denoise": 2,
+            "low-resolution": 1, "imputation": 1.5, "impute": 1.5, "imputing": 1.5, "denoising": 1.5, "denoise": 1.5,
             "upsampling": 2, "downsampled": 1, "sequencing depth": 1, "low-coverage": 1, "sparsity": 1,
             "HiCPlus": 4, "HiCNN": 4, "DeepHiC": 4, "hicGAN": 4, "HiCSR": 4, "HiCARN": 4,
             "re:VEHiCLE": 4, "HiCDiff": 4, "HiCDiffusion": 4, "SRHiC": 4, "Higashi": 1,
@@ -392,10 +410,10 @@ CATEGORIES: dict[str, dict] = {
     "3D Structure Prediction": {
         "description": "Reconstructing 3D chromosome / genome structures and structural ensembles",
         "terms": {
-            "3D structure": 2, "3D structures": 2, "3D reconstruction": 3, "structure reconstruction": 3,
+            "3D structure": 1, "3D structures": 1, "3D reconstruction": 3, "structure reconstruction": 3,
             "re:(?i)reconstruct\\w*\\s+(?:the\\s+)?(?:3D|three-dimensional)": 3,
             "3D genome structure": 3, "3D chromosome structure": 3, "3D chromatin structure": 3,
-            "3D model": 2, "3D modeling": 2, "3D modelling": 2, "structural ensemble": 3,
+            "3D model": 1.5, "3D modeling": 1.5, "3D modelling": 1.5, "structural ensemble": 3,
             "ensemble of structures": 3, "structure inference": 3, "spatial coordinates": 2,
             "multidimensional scaling": 2, "chromosome structure": 1, "genome structure": 1,
             "Pastis": 3, "ShRec3D": 3, "Chromosome3D": 3, "3DMax": 3, "LorDG": 3,
@@ -404,12 +422,14 @@ CATEGORIES: dict[str, dict] = {
     "TAD & Compartment Detection": {
         "description": "Calling and predicting TADs, sub-TADs, domain boundaries and A/B (sub)compartments",
         "terms": {
-            "TAD": 2, "topologically associating domain": 2, "topologically associated domain": 2,
+            "TAD": 1.5, "topologically associating domain": 1.5, "topologically associated domain": 1.5,
+            "topological domain": 1.5,
             "TAD boundary": 3, "TAD boundaries": 3, "sub-TAD": 3, "domain boundary": 2, "domain boundaries": 2,
             "domain calling": 3, "domain caller": 3, "TAD calling": 3, "TAD caller": 3, "domain detection": 3,
             "hierarchical domain": 2, "insulation score": 2, "insulation": 1,
             "A/B compartment": 3, "subcompartment": 3, "sub-compartment": 3, "compartmentalization": 2,
-            "compartment": 1, "re:Arrowhead": 3, "TopDom": 3, "Armatus": 3, "deDoc": 3, "SpectralTAD": 3,
+            "compartment": 0.75, "chromosome interaction domain": 3, "chromosomal interaction domain": 3,
+            "re:Arrowhead": 3, "TopDom": 3, "Armatus": 3, "deDoc": 3, "SpectralTAD": 3,
             "OnTAD": 3, "TADbit": 3, "deepTAD": 3, "re:TADpole": 3,
         },
     },
@@ -436,30 +456,34 @@ CATEGORIES: dict[str, dict] = {
     "Epigenomics & Sequence-based Prediction": {
         "description": "Predicting 3D contacts from DNA sequence and epigenomic features (Akita, Orca, C.Origami, ...)",
         "terms": {
-            "DNA sequence": 2, "sequence-based": 2, "sequence alone": 3, "from sequence": 2,
-            "sequence features": 1, "in silico mutagenesis": 3, "in silico perturbation": 3,
+            "DNA sequence": 1, "sequence-based": 1.5, "sequence alone": 3, "from sequence": 2,
+            "from DNA sequence": 3, "genomic sequence": 1, "epigenomic features": 2, "histone marks": 1,
+            "histone modification": 1, "sequence features": 1, "in silico mutagenesis": 3, "in silico perturbation": 3,
             "in silico screen": 3, "variant effect": 2, "genetic variant": 1, "epigenomic": 1,
             "epigenetic features": 1, "histone": 1, "chromatin accessibility": 1,
             "re:(?i)predict\\w*\\s+(?:\\w+\\s+){0,4}(?:contact\\s+maps?|Hi-?C|3D\\s+genome|genome\\s+folding|chromatin\\s+(?:structure|organi[sz]ation|contacts|folding))": 3,
             "Akita": 3, "re:\\bOrca\\b": 3, "re:C\\.\\s?Origami": 3, "re:\\bDeepC\\b": 3, "ChromaFold": 3,
             "EPCOT": 3, "Enformer": 2, "Borzoi": 2, "Basenji": 2, "re:\\bSei\\b": 1,
+            "re:(?i)(?:3D genome|genome folding|chromatin (?:structure|contacts?|organi[sz]ation|architecture|interactions?)|contact maps?|Hi-?C)\\w*\\s+(?:\\w+\\s+){0,3}prediction": 3,
         },
     },
     "Single-cell 3D Genomics": {
         "description": "Single-cell and single-nucleus 3D genome assays and their computational analysis",
         "terms": {
-            "single-cell": 2, "single cell": 2, "single-nucleus": 2, "re:sc-?Hi-?C": 3, "Dip-C": 3,
-            "sn-m3C-seq": 3, "snm3C": 3, "HiRES": 2, "cell-to-cell variability": 2, "cell type": 1,
-            "cell-type": 1, "Higashi": 3, "scHiCluster": 3, "Fast-Higashi": 3, "BandNorm": 3, "scGAD": 3,
+            "single-cell": 0.75, "single cell": 0.75, "single-nucleus": 0.75, "re:sc-?Hi-?C": 3, "Dip-C": 3,
+            "single-cell Hi-C": 4, "single-nucleus Hi-C": 4, "single-cell 3D": 4, "single-cell chromatin conformation": 4,
+            "single-cell chromatin structure": 3, "single-cell chromatin tracing": 3, "single-cell resolution": 1,
+            "sn-m3C-seq": 3, "snm3C": 3, "HiRES": 2, "cell-to-cell variability": 2, "cell type": 0.5,
+            "cell-type": 0.5, "Higashi": 3, "scHiCluster": 3, "Fast-Higashi": 3, "BandNorm": 3, "scGAD": 3,
         },
     },
     "Multi-omics Integration": {
         "description": "Integrating 3D genome data with transcriptomic, epigenomic and other modalities",
         "terms": {
             "multi-omics": 3, "multiomics": 3, "multi-omic": 3, "multi-modal": 2, "multimodal": 2,
-            "integrative analysis": 2, "data integration": 2, "integrating": 1, "ChIP-seq": 0.5,
-            "ATAC-seq": 0.5, "RNA-seq": 0.5, "DNA methylation": 0.5, "histone modification": 0.5,
-            "gene expression": 0.5, "transcriptome": 0.5, "epigenome": 0.5, "epigenomic": 0.5,
+            "integrative analysis": 2, "data integration": 2, "integrating": 1, "ChIP-seq": 0.7,
+            "ATAC-seq": 0.7, "RNA-seq": 0.7, "DNA methylation": 0.7, "histone modification": 0.7,
+            "gene expression": 0.5, "transcriptome": 0.7, "epigenome": 0.7, "epigenomic": 0.5,
         },
     },
     "Generative & Foundation Models": {
@@ -490,6 +514,8 @@ CATEGORIES: dict[str, dict] = {
             "4C-seq": 2, "5C": 1, "ChIA-PET": 1, "ChIA-Drop": 2, "SPRITE": 2, "genome architecture mapping": 3,
             "Pore-C": 2, "concatemer": 2, "multi-way contact": 2, "multiway": 1, "DamID": 2, "TSA-seq": 2,
             "DNA-FISH": 2, "DNA FISH": 2, "chromatin tracing": 2, "long-read": 1,
+            "super-resolution microscopy": 2, "super-resolution imaging": 2,
+            "re:(?i)\\bwe (?:performed|generated|conducted|produced|applied)\\s+(?:\\w+\\s+){0,3}(?:in situ\\s+)?(?:Hi-?C|Micro-C|HiChIP|ChIA-PET|Capture Hi-C|4C-seq)": 2,
         },
     },
     "Nuclear Organization & Architecture": {
@@ -499,7 +525,8 @@ CATEGORIES: dict[str, dict] = {
             "nuclear body": 2, "nuclear bodies": 2, "nuclear speckle": 3, "nucleolus": 2, "nucleolar": 2,
             "nuclear lamina": 3, "lamina-associated domain": 3, "LAD": 2, "nuclear envelope": 2,
             "nuclear periphery": 2, "chromosome territory": 3, "chromosome territories": 3,
-            "nuclear pore": 2, "radial position": 2, "heterochromatin": 1, "lamin": 1,
+            "nuclear pore": 2, "radial position": 2, "heterochromatin": 1, "lamin": 1, "lamina": 1.5,
+            "radial": 1, "interchromosomal": 1.5, "inter-chromosomal": 1.5, "nuclear position": 2, "nucleoid": 2,
         },
     },
     "Phase Separation & Chromatin": {
@@ -527,7 +554,8 @@ CATEGORIES: dict[str, dict] = {
             "differential analysis": 2, "differential interaction": 2, "differential chromatin": 2,
             "file format": 2, "scalable": 1, "HiC-Pro": 3, "re:\\bJuicer\\b": 3, "re:\\bcooler\\b": 3,
             "distiller": 2, "pairtools": 3, "HiCExplorer": 3, "FAN-C": 3, "HiCRep": 3, "GenomeDISCO": 3,
-            "diffHic": 3, "multiHiCcompare": 3, "CHESS": 2, "pipeline": 1,
+            "diffHic": 3, "multiHiCcompare": 3, "CHESS": 2, "pipeline": 1, "data processing": 2,
+            "analysis pipeline": 2, "Python package": 2, "R package": 2, "toolkit": 1.5, "software": 1,
         },
     },
     "Visualization & Browsers": {
@@ -559,7 +587,14 @@ CATEGORIES: dict[str, dict] = {
     "Benchmark & Review": {
         "description": "Reviews, benchmarks, comparisons and perspectives on 3D genome methods",
         "title_only": True,
-        "pub_types": ["review", "systematic review", "meta-analysis"],
+        "facet": True,
+        "pub_types": ["review", "review-article", "systematic review", "meta-analysis"],
+        "abstract_terms": {
+            "re:(?i)\\b(?:in this|this) (?:review|mini-review|minireview|perspective|survey)\\b": 3,
+            "re:(?i)\\bwe (?:review|survey|summari[sz]e) (?:the |recent |current |existing |state-of-the-art )*(?:advances|progress|developments|methods|approaches|tools|literature|state|field|computational)": 3,
+            "re:(?i)\\bwe (?:benchmark(?:ed)?|systematically (?:compare|evaluate)d?)\\b": 3,
+            "re:(?i)\\bhere,? we (?:summari[sz]e|discuss|highlight) (?:recent|current)\\b": 3,
+        },
         "terms": {
             "review": 3, "survey": 3, "benchmark": 3, "benchmarking": 3, "comparison": 2,
             "comparative analysis": 2, "systematic evaluation": 3, "evaluation": 1, "perspective": 2,
@@ -583,6 +618,64 @@ EMAIL_RECIPIENTS = [
     if addr.strip()
 ]
 EMAIL_MAX_PAPERS = 60
+
+# ---------------------------------------------------------------------------
+# Large language model (AI reading assistant and Chinese translation)
+# Any OpenAI-compatible chat-completions API works:
+#   DeepSeek  https://api.deepseek.com                            deepseek-chat / deepseek-reasoner
+#   Qwen      https://dashscope.aliyuncs.com/compatible-mode/v1   qwen-max
+#   Moonshot  https://api.moonshot.cn/v1                          (model name from the provider)
+# The web app can edit these settings; they are saved to ENV_FILE.
+# ---------------------------------------------------------------------------
+DEFAULT_LLM_BASE = "https://api.deepseek.com"
+DEFAULT_LLM_MODEL = "deepseek-chat"
+DEFAULT_LLM_REASONING_MODEL = "deepseek-reasoner"
+LLM_SETTING_KEYS = ("LLM_API_KEY", "LLM_API_BASE", "LLM_MODEL", "LLM_REASONING_MODEL")
+
+LLM_API_KEY = ""
+LLM_API_BASE = DEFAULT_LLM_BASE
+LLM_MODEL = DEFAULT_LLM_MODEL
+LLM_REASONING_MODEL = DEFAULT_LLM_REASONING_MODEL
+
+
+def _env(*names: str, default: str = "") -> str:
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return default
+
+
+def reload_llm_settings() -> None:
+    """(Re)read the model settings from the environment (DEEPSEEK_* and TRANSLATE_* are accepted aliases)."""
+    global LLM_API_KEY, LLM_API_BASE, LLM_MODEL, LLM_REASONING_MODEL
+    LLM_API_KEY = _env("LLM_API_KEY", "DEEPSEEK_API_KEY", "TRANSLATE_API_KEY")
+    LLM_API_BASE = _env("LLM_API_BASE", "TRANSLATE_API_BASE", default=DEFAULT_LLM_BASE)
+    LLM_MODEL = _env("LLM_MODEL", "TRANSLATE_MODEL", default=DEFAULT_LLM_MODEL)
+    LLM_REASONING_MODEL = _env("LLM_REASONING_MODEL", default=DEFAULT_LLM_REASONING_MODEL)
+
+
+reload_llm_settings()
+
+LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "180") or 180)
+LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "8192") or 8192)
+LLM_REASONING_MAX_TOKENS = int(os.getenv("LLM_REASONING_MAX_TOKENS", "32768") or 32768)
+
+# AI reading assistant
+AI_CONTEXT_CHARS = int(os.getenv("AI_CONTEXT_CHARS", "120000") or 120000)
+AI_FULLTEXT_CHARS = int(os.getenv("AI_FULLTEXT_CHARS", "60000") or 60000)
+AI_FULLTEXT_MAX_PAPERS = 5
+AI_MAX_PAPERS = 200
+AI_BATCH_CHARS = 45000
+AI_LIBRARY_TOP_K = 15
+AI_CHAT_CONTEXT_MAX = 40
+FULLTEXT_CACHE_DAYS_MISSING = 14
+
+# Chinese academic translation
+TRANSLATE_NEW_PAPERS = os.getenv("TRANSLATE_NEW_PAPERS", "1").strip().lower() not in ("0", "false", "no", "off")
+TRANSLATE_MAX_PER_RUN = int(os.getenv("TRANSLATE_MAX_PER_RUN", "100") or 100)
+TRANSLATE_MIN_LENGTH_RATIO = 0.2
+TRANSLATE_MAX_LENGTH_RATIO = 1.1
 
 # ---------------------------------------------------------------------------
 # Web GUI

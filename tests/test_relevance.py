@@ -62,6 +62,15 @@ IRRELEVANT = [
      "Patients with LAD stenosis and coronary disease were followed."),
     ("Metagenomic Hi-C binning of microbial communities",
      "Proximity ligation (Hi-C) links contigs in metagenomes to reconstruct genomes."),
+    ("Whole-genome deep learning predicts chemotherapy response in colorectal cancer",
+     "A deep neural network trained on whole-genome sequencing predicts response; features include copy number, "
+     "mutational signatures and chromatin states, and we note that Hi-C data were not required."),
+    ("Synthetic community Hi-C benchmarking provides a baseline for virus-host inferences",
+     "Hi-C proximity ligation links phage and bacterial contigs in a synthetic community to infer virus-host pairs."),
+    ("DeepRCI: predicting RNA-chromatin interactions via deep learning with multi-omics data",
+     "RNA-chromatin interactions measured by RNA-DNA proximity ligation are predicted with a deep learning model."),
+    ("Chromatin modifiers alter recombination between divergent DNA sequences",
+     "We show chromatin modifiers affect homeologous recombination; chromatin interactions were not assayed."),
     ("Tadpole organ development and gut organization",
      "Organogenesis in tadpoles; organization of the gut; vitamin activity."),
 ]
@@ -119,3 +128,25 @@ def test_curated_paper_needs_only_a_core_term():
     q = paper("An unrelated paper about photosynthesis", "Light harvesting in plants.")
     q["curated"] = True
     assert not is_relevant(annotate(q))
+
+
+def test_review_is_a_facet_added_on_top_of_topics():
+    p = paper("Benchmarking TAD callers and deep learning models for chromatin loop detection in Hi-C data",
+              "We benchmarked 12 TAD calling algorithms and loop callers on Hi-C contact maps.")
+    cats = categorize_paper(p)
+    assert "Benchmark & Review" in cats
+    assert len([c for c in cats if c != "Benchmark & Review"]) >= 1
+
+
+def test_bacterial_chromosome_interaction_domains_count_as_tads():
+    p = paper("Differential genome organization of Mycobacterium tuberculosis strains",
+              "Hi-C contact maps reveal chromosome interaction domains (CIDs) whose boundaries differ between strains.")
+    assert "TAD & Compartment Detection" in categorize_paper(p)
+
+
+def test_super_resolution_imaging_is_not_hic_enhancement():
+    p = paper("Super-resolution imaging reveals higher-order chromatin folding in cancer cells",
+              "Super-resolution microscopy of chromatin shows compaction of chromatin domains and altered genome folding.")
+    cats = categorize_paper(p)
+    assert "Hi-C Enhancement & Super-Resolution" not in cats
+    assert "Experimental Methods & Technologies" in cats

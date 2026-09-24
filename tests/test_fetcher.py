@@ -169,3 +169,58 @@ def test_crossref_and_s2_retry_without_unsupported_params():
     s2 = fetch_semantic_scholar("q", since="2025-01-01", until="2025-12-31", client=c)
     assert [p["arxiv_id"] for p in s2] == ["2503.00999"]
     assert len(calls) == 4
+
+
+def test_repeatedly_failing_source_is_skipped(monkeypatch):
+    monkeypatch.setattr(config, "SEARCH_TOPICS", config.SEARCH_TOPICS[:3])
+    calls = {"s2": 0}
+
+    def handler(request):
+        if request.url.host == "api.semanticscholar.org":
+            calls["s2"] += 1
+            return httpx.Response(429, headers={"Retry-After": "0"})
+        from conftest import api_router
+        return api_router(request)
+
+    report = {}
+    fetch_all_papers(since="2025-01-01", report=report, client=make_client(handler))
+    s2_jobs = sum(len(t["plain"]) for t in config.SEARCH_TOPICS)
+    assert len([e for e in report["errors"] if e["source"] == "semantic_scholar"]) == config.SOURCE_FAILURE_LIMIT
+    assert report["skipped"]["semantic_scholar"] == s2_jobs - config.SOURCE_FAILURE_LIMIT
+    assert calls["s2"] == config.SOURCE_FAILURE_LIMIT * (config.HTTP_MAX_RETRIES + 1)
+
+
+def test_non_json_response_is_explained():
+    def handler(request):
+        return httpx.Response(403, content=b"<html>Just a moment...</html>", headers={"content-type": "text/html"})
+
+    import pytest
+    with pytest.raises(httpx.HTTPStatusError):
+        fetch_biorxiv_recent("2025-01-01", "2025-01-02", client=make_client(handler))
+
+    def handler_ok_html(request):
+        return httpx.Response(200, content=b"<html>Just a moment...</html>", headers={"content-type": "text/html"})
+
+    with pytest.raises(ValueError, match="non-JSON response from api.biorxiv.org \\(HTTP 200, text/html\\)"):
+        fetch_biorxiv_recent("2025-01-01", "2025-01-02", client=make_client(handler_ok_html))
+
+
+def test_future_issue_date_falls_back_to_pubmed_entry_date():
+    xml = b"""<PubmedArticleSet><PubmedArticle><MedlineCitation><PMID>1</PMID><Article>
+    <Journal><JournalIssue><PubDate><Year>2099</Year></PubDate></JournalIssue><Title>Methods Mol Biol</Title></Journal>
+    <ArticleTitle>Hi-C analysis of chromatin loops</ArticleTitle></Article></MedlineCitation>
+    <PubmedData><History><PubMedPubDate PubStatus="pubmed"><Year>2026</Year><Month>9</Month><Day>1</Day></PubMedPubDate></History>
+    </PubmedData></PubmedArticle></PubmedArticleSet>"""
+    assert parse_pubmed_xml(xml)[0]["date"] == "2026-09-01"
+
+
+def test_pubmed_esearch_tolerates_control_characters():
+    def handler(request):
+        if request.url.path.endswith("esearch.fcgi"):
+            body = '{"esearchresult": {"idlist": ["39000001"], "querytranslation": "a\tb\x01c"}}'
+            return httpx.Response(200, content=body.encode(), headers={"content-type": "application/json"})
+        from conftest import api_router
+        return api_router(request)
+
+    papers = fetch_pubmed("q", max_results=5, client=make_client(handler))
+    assert len(papers) == 3

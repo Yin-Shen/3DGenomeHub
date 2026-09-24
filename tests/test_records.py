@@ -60,3 +60,14 @@ def test_curated_doi_file(tmp_project):
     from genome_literature import config
     config.CURATED_DOIS_FILE.write_text("10.1038/ABC  Akita\n\nnot-a-doi\n10.1126/science.1  Hi-C\n", encoding="utf-8")
     assert load_curated_dois() == ["10.1038/abc", "10.1126/science.1"]
+
+
+def test_escaped_markup_in_titles_is_removed():
+    assert clean_title("Hybrids of F&lt;sub&gt;1&lt;/sub&gt; males") == "Hybrids of F1 males"
+    assert clean_title("Loops with p < 0.05 and q > 1") == "Loops with p < 0.05 and q > 1"
+
+
+def test_far_future_issue_dates_fall_back_to_first_seen():
+    p = normalize_record({"title": "Hi-C chromatin loops in plants", "date": "2099-01-01", "year": 2099,
+                          "first_seen": "2026-09-01", "source": "pubmed"})
+    assert p["date"] == "2026-09-01" and p["year"] == 2026

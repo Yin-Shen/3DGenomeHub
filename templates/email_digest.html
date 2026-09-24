@@ -47,6 +47,9 @@
               {% for paper in papers %}
               <div style="margin-bottom:14px;padding-left:10px;border-left:3px solid {{ '#7c3aed' if paper.track == 'ml' else '#d1d5db' }};">
                 <a href="{{ paper.url }}" style="color:#1d4ed8;text-decoration:none;font-weight:600;font-size:14px;line-height:1.4;">{{ paper.title }}</a>
+                {% if paper.title_zh %}
+                <div style="font-size:13px;color:#374151;margin-top:2px;line-height:1.45;">{{ paper.title_zh }}</div>
+                {% endif %}
                 <div style="font-size:12px;color:#6b7280;margin-top:3px;">
                   {{ authors(paper) }} &middot; {{ paper.journal }} ({{ paper.date or paper.year }})
                   &middot; {{ label(paper.track) }}{% if paper.dl_methods %} &middot; {{ paper.dl_methods[:3]|join(', ') }}{% endif %}

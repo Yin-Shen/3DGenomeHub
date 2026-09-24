@@ -72,8 +72,10 @@ def test_web_endpoints(server):
     assert stats["total_papers"] == 2 and stats["ml_papers"] == 1
     _, _, body = _get(server + "/api/search?q=transformer")
     assert json.loads(body)[0]["doi"] == "10.1/a"
-    _, _, body = _get(server + "/api/analysis")
-    assert json.loads(body)["dl_paper_count"] == 1
+    _, ctype, body = _get(server + "/static/app.js")
+    assert "javascript" in ctype and "streamPost" in body
+    with pytest.raises(urllib.error.HTTPError):
+        _get(server + "/static/../web_app.py")
     _, ctype, body = _get(server + "/api/export?format=bib")
     assert "bibtex" in ctype and "@article" in body
 

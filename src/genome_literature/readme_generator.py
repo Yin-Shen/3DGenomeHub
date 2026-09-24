@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import config
+from . import config, translator
 from .categorizer import get_statistics, group_by_category
 from .summarizer import short_authors
 
@@ -75,6 +75,14 @@ def title_link(p: dict[str, Any]) -> str:
     return f"[{title}]({p['url']})" if p.get("url") else title
 
 
+_MD_BREAK = "  \n  "
+
+
+def zh_title(p: dict[str, Any], sep: str = "<br>") -> str:
+    """Chinese title line when an academic translation is available."""
+    return f"{sep}{md_escape(p['title_zh'])}" if p.get("title_zh") else ""
+
+
 def category_link(cat: str, prefix: str = "docs/papers/") -> str:
     return f"[{md_escape(cat)}]({prefix}{slugify(cat)}.md)"
 
@@ -130,7 +138,7 @@ def _paper_row(p: dict[str, Any]) -> str:
     meta = md_escape(short_authors(p.get("authors") or []))
     t = tags(p, with_track=False)
     return (
-        f"| {p.get('date') or p.get('year') or ''} | **{title_link(p)}**<br><sub>{meta}"
+        f"| {p.get('date') or p.get('year') or ''} | **{title_link(p)}**{zh_title(p)}<br><sub>{meta}"
         f"{' · ' + t if t else ''}</sub> | {md_escape(p.get('journal') or '')} | {cats} |"
     )
 
@@ -195,7 +203,7 @@ def _cited_section(papers: list[dict[str, Any]]) -> str:
     for p in cited:
         meta = md_escape(short_authors(p.get("authors") or []))
         lines.append(
-            f"| {p['citations']} | **{title_link(p)}**<br><sub>{meta} · {tags(p, with_track=False)}</sub> | "
+            f"| {p['citations']} | **{title_link(p)}**{zh_title(p)}<br><sub>{meta} · {tags(p, with_track=False)}</sub> | "
             f"{md_escape(p.get('journal') or '')} | {p.get('year') or ''} |"
         )
     return "\n".join(lines)
@@ -257,8 +265,8 @@ def _usage_section() -> str:
     return """## Usage
 
 **Web app** (Windows / macOS / Linux, Python 3.9+): `python run.py` — installs dependencies on first run and
-opens <http://localhost:8686> with search, filters, landscape analysis and one-click updates.
-On Windows, `build_exe.bat` builds a standalone `dist/3DGenomeHub.exe`.
+opens <http://localhost:8686>: search and filters, one-click updates, bilingual display and the AI reading
+assistant. On Windows, `build_exe.bat` builds a standalone `dist/3DGenomeHub.exe`.
 
 **Command line**
 
@@ -272,6 +280,11 @@ python -m genome_literature stats
 python -m genome_literature export --format bib   # json / csv / bib
 python -m genome_literature rebuild               # re-score and re-categorize after editing config.py
 python -m genome_literature serve                 # web GUI
+python -m genome_literature translate --ml -n 50  # academic Chinese translation (see below)
+python -m genome_literature translate-text "Title" "Abstract"
+python -m genome_literature ask "单细胞 Hi-C 数据增强有哪些深度学习方法？"
+python -m genome_literature ai review --query "loop extrusion cohesin" -n 40 -o review.md
+python -m genome_literature ai interpret --id 10.1038/s41592-020-0958-x
 ```
 
 **How papers are selected.** Topic queries (`SEARCH_TOPICS` in `config.py`) run against PubMed, Europe PMC
@@ -281,9 +294,26 @@ pass a weighted threshold, with penalties for look-alikes (Hi-C genome-assembly 
 maps, transactivation domains). Records are merged across databases by DOI, PMID, arXiv ID and normalized
 title, then tagged with an AI/ML track, architecture families (CNN, Transformer, GNN, …) and up to three topics.
 
+**AI reading assistant (AI 研读助手).** Enter a DeepSeek API key under **设置 AI** in the web app (saved to the
+local `.env` as `LLM_API_KEY`; `LLM_API_BASE` / `LLM_MODEL` / `LLM_REASONING_MODEL` select any OpenAI-compatible
+provider). Then use **AI 解读** on a paper (structured interpretation, from the open-access full text via Europe
+PMC or arXiv when available, otherwise from the abstract), add papers to the **研读清单** for multi-paper
+summaries, comparison tables, literature-review drafts and research-gap analysis, or open **AI 讨论** to ask
+questions about the reading list, the current filter results or the whole library (relevant papers are retrieved
+first). Answers must cite the supplied papers as [n]; citations are checked and the reference list is generated
+from the database. Every result is saved as Markdown in `ai_notes/` (**我的笔记**).
+
+**Chinese academic translation (中文学术翻译).** Uses the same model settings. Titles and
+abstracts are translated with a curated 3D-genome / deep-learning glossary at temperature 0; every result is
+checked automatically (acronyms, gene and tool names, numbers, glossary terms, completeness) and corrected once
+if needed. Translations that still fail a check are marked 译文待校对 for manual proofreading. Results are cached
+in `papers/translations.json`; set `"reviewed": true` on a corrected entry to lock it. In the web app use
+**中英对照**, **翻译本页** or the **中文翻译** button on a paper; `run-pipeline` translates new papers automatically.
+
 **Automation.** `.github/workflows/update.yml` runs every Monday, commits `papers/`, this README and
 `docs/papers/`, and emails a digest when SMTP secrets are set. Optional secrets: `NCBI_API_KEY`,
-`NCBI_EMAIL`, `SEMANTIC_SCHOLAR_API_KEY`, `SMTP_*`, `EMAIL_FROM`, `EMAIL_RECIPIENTS` (see `.env.example`).
+`NCBI_EMAIL`, `SEMANTIC_SCHOLAR_API_KEY`, `SMTP_*`, `EMAIL_FROM`, `EMAIL_RECIPIENTS`, `LLM_API_KEY`,
+`LLM_API_BASE`, `LLM_MODEL` (see `.env.example`); with an API key, new papers are translated automatically.
 
 Architecture notes: [docs/architecture.md](docs/architecture.md) · Landmark papers: `papers/curated_dois.txt`"""
 
@@ -298,8 +328,9 @@ def _entry(p: dict[str, Any]) -> str:
     cites = f" · {p['citations']} citations" if p.get("citations") else ""
     t = tags(p)
     links = paper_links(p)
+    zh = zh_title(p, _MD_BREAK)
     return (
-        f"- **{title_link(p)}**  \n  {authors}. *{venue}* ({p.get('date') or p.get('year') or 'n.d.'}){cites}"
+        f"- **{title_link(p)}**{zh}  \n  {authors}. *{venue}* ({p.get('date') or p.get('year') or 'n.d.'}){cites}"
         f"{'  ' + t if t else ''}{'  · ' + links if links else ''}"
     )
 
@@ -329,6 +360,9 @@ def paper_list_page(title: str, description: str, papers: list[dict[str, Any]]) 
 def write_outputs(papers: list[dict[str, Any]], new_papers: list[dict[str, Any]] | None = None) -> list[Path]:
     """Write README.md and docs/papers/*.md; remove stale generated pages."""
     written: list[Path] = []
+    cache = translator.load_cache()
+    papers = translator.attach_translations(papers, cache)
+    new_papers = translator.attach_translations(new_papers or [], cache)
     config.README_PATH.write_text(generate_readme(papers, new_papers), encoding="utf-8")
     written.append(config.README_PATH)
 

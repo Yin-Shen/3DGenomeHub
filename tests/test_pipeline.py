@@ -69,9 +69,15 @@ def test_empty_database_triggers_backfill(tmp_project, monkeypatch):
 
 
 def test_resolve_window_uses_oldest_successful_source():
-    state = {"sources": {"pubmed": {"until": "2025-03-10"}, "arxiv": {"until": "2025-03-01"}}}
+    from datetime import datetime, timedelta
+    from genome_literature.records import today
+
+    def days_ago(n):
+        return (datetime.strptime(today(), "%Y-%m-%d") - timedelta(days=n)).strftime("%Y-%m-%d")
+
+    state = {"sources": {"pubmed": {"until": days_ago(5)}, "arxiv": {"until": days_ago(14)}}}
     since, backfill = pipeline.resolve_window(state, True, None, False, ["pubmed", "arxiv"])
-    assert since == "2025-02-22" and not backfill
+    assert since == days_ago(14 + config.INCREMENTAL_OVERLAP_DAYS) and not backfill
 
 
 def test_stale_generated_pages_are_removed(tmp_project, monkeypatch):
@@ -90,3 +96,34 @@ def test_github_anchor_and_escaping():
     assert github_anchor("Hi-C Enhancement & Super-Resolution") == "hi-c-enhancement--super-resolution"
     assert github_anchor("Most-cited AI/ML papers") == "most-cited-aiml-papers"
     assert md_escape("a|b [c] *d*") == "a\\|b \\[c\\] \\*d\\*"
+
+
+def test_incremental_window_is_capped():
+    state = {"sources": {"pubmed": {"until": "2020-01-01"}}}
+    since, _ = pipeline.resolve_window(state, True, None, False, ["pubmed"])
+    from datetime import datetime, timedelta
+    from genome_literature.records import today
+    earliest = (datetime.strptime(today(), "%Y-%m-%d") - timedelta(days=config.MAX_INCREMENTAL_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+    assert since == earliest
+
+
+def test_landmark_flag_follows_curated_list(tmp_project):
+    config.CURATED_DOIS_FILE.write_text("10.1000/listed  Landmark\n", encoding="utf-8")
+    listed = normalize_record({"title": "Chromatin loops in Hi-C maps of human cells", "doi": "10.1000/listed",
+                               "abstract": "Hi-C chromatin loops and TADs.", "source": "pubmed"})
+    unlisted = normalize_record({"title": "Topologically associating domains in Hi-C maps of fly embryos",
+                                 "doi": "10.1000/other", "abstract": "Hi-C TADs and chromatin loops.",
+                                 "source": "pubmed", "curated": True})
+    kept, _ = pipeline.refresh_annotations([listed, unlisted])
+    flags = {p["doi"]: p["curated"] for p in kept}
+    assert flags == {"10.1000/listed": True, "10.1000/other": False}
+
+
+def test_late_duplicates_are_merged_on_refresh():
+    a = normalize_record({"title": "Deep learning of Hi-C chromatin loops in human cells", "doi": "10.1/a",
+                          "abstract": "Hi-C chromatin loops predicted by a convolutional neural network.", "source": "pubmed"})
+    b = normalize_record({"title": "A different working title for the Hi-C loop paper", "pmid": "77",
+                          "abstract": "Hi-C chromatin loops predicted by a convolutional neural network.", "source": "europepmc"})
+    a["pmid"] = "77"
+    kept, _ = pipeline.refresh_annotations([a, b])
+    assert len(kept) == 1

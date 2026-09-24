@@ -37,13 +37,24 @@ def main() -> None:
         cfg.NEW_PAPERS_JSON = cfg.PAPERS_DIR / "new_papers.json"
         cfg.STATE_JSON = cfg.PAPERS_DIR / "state.json"
         cfg.CURATED_DOIS_FILE = cfg.PAPERS_DIR / "curated_dois.txt"
+        cfg.TRANSLATIONS_JSON = cfg.PAPERS_DIR / "translations.json"
+        cfg.AI_NOTES_DIR = exe_dir / "ai_notes"
+        cfg.CACHE_DIR = exe_dir / ".cache"
+        cfg.FULLTEXT_CACHE_DIR = cfg.CACHE_DIR / "fulltext"
+        cfg.ENV_FILE = exe_dir / ".env"
+        if cfg.ENV_FILE.exists():
+            from dotenv import load_dotenv
+
+            load_dotenv(cfg.ENV_FILE)
+            cfg.reload_llm_settings()
         cfg.TEMPLATE_DIR = exe_dir / "templates"
         cfg.README_PATH = exe_dir / "README.md"
         cfg.CATEGORY_PAGES_DIR = exe_dir / "docs" / "papers"
         cfg.PAPERS_DIR.mkdir(exist_ok=True)
 
         bundled = Path(base)
-        for rel in ("papers/curated_dois.txt", "papers/papers.json", "papers/state.json", "templates/email_digest.html"):
+        for rel in ("papers/curated_dois.txt", "papers/papers.json", "papers/state.json", "papers/translations.json",
+                    "templates/email_digest.html"):
             target = exe_dir / rel
             if not target.exists() and (bundled / rel).exists():
                 target.parent.mkdir(parents=True, exist_ok=True)

@@ -6,12 +6,12 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any, Callable, Iterable
 
-from . import config
+from . import config, translator
 from .categorizer import categorize_papers
 from .email_notifier import send_digest_email
 from .fetcher import fetch_all_papers
 from .readme_generator import write_outputs
-from .records import now_iso, today
+from .records import PaperIndex, now_iso, today
 from .relevance import filter_relevant
 from .storage import load_curated_dois, load_papers, load_state, merge_papers, save_papers, save_state
 from .summarizer import generate_digest
@@ -39,11 +39,21 @@ def resolve_window(
         start = datetime.strptime(state["last_fetch_until"], "%Y-%m-%d") - timedelta(days=config.INCREMENTAL_OVERLAP_DAYS)
     else:
         start = datetime.strptime(today(), "%Y-%m-%d") - timedelta(days=config.DEFAULT_LOOKBACK_DAYS)
-    return start.strftime("%Y-%m-%d"), False
+    earliest = datetime.strptime(today(), "%Y-%m-%d") - timedelta(days=config.MAX_INCREMENTAL_LOOKBACK_DAYS)
+    return max(start, earliest).strftime("%Y-%m-%d"), False
+
+
+def apply_curated_flags(papers: list[dict[str, Any]]) -> None:
+    """Mark exactly the papers listed in papers/curated_dois.txt as landmarks."""
+    curated = set(load_curated_dois())
+    for p in papers:
+        p["curated"] = bool(curated & {p.get("doi"), p.get("preprint_doi")})
 
 
 def refresh_annotations(papers: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Re-score and re-categorize every paper; drop ones that no longer qualify."""
+    """Merge late-detected duplicates, re-flag landmarks, re-score and re-categorize; drop papers that no longer qualify."""
+    papers = PaperIndex(papers).papers
+    apply_curated_flags(papers)
     kept, pruned = filter_relevant(papers)
     categorize_papers(kept)
     return kept, pruned
@@ -130,6 +140,15 @@ def run_pipeline(
     })
     state["runs"] = runs[-30:]
     save_state(state)
+
+    if new_papers and translator.is_configured() and config.TRANSLATE_NEW_PAPERS:
+        queue = sorted(new_papers, key=lambda p: (p.get("track") == "ml", p.get("relevance", 0)), reverse=True)
+        step(f"Translating up to {config.TRANSLATE_MAX_PER_RUN} new papers into Chinese")
+        try:
+            result["translation"] = translator.translate_papers(queue, limit=config.TRANSLATE_MAX_PER_RUN, progress=progress)
+        except Exception as exc:
+            logger.exception("Translation step failed")
+            result["translation"] = {"translated": 0, "failed": len(queue), "errors": [str(exc)]}
 
     digest = generate_digest(new_papers, all_papers)
     result["digest_summary"] = digest["summary_text"]
