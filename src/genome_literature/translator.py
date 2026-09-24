@@ -1,8 +1,9 @@
 """Academic English -> Simplified Chinese translation of paper titles and abstracts.
 
-The translation engine is any OpenAI-compatible chat-completions endpoint
-(DeepSeek, Qwen/DashScope compatible mode, Moonshot, OpenAI, a local server,
-...) configured with TRANSLATE_API_BASE / TRANSLATE_API_KEY / TRANSLATE_MODEL.
+The translation engine is the shared model client (``llm.py``): any
+OpenAI-compatible chat-completions endpoint (DeepSeek by default, Qwen,
+Moonshot, a local server, ...) configured with LLM_API_KEY / LLM_API_BASE /
+LLM_MODEL or from the web app's AI settings.
 
 Accuracy safeguards:
 
@@ -29,11 +30,9 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable
 
-import httpx
-
-from . import config
+from . import config, llm
 from .matching import compile_term, normalize_text
-from .net import HttpClient, get_client
+from .net import HttpClient
 from .storage import load_json, save_json
 
 logger = logging.getLogger(__name__)
@@ -162,12 +161,12 @@ _DIMENSION_ZH = {"2": "二维", "3": "三维", "4": "四维"}
 _GLOSSARY_PATTERNS = [(en, zh, check, compile_term(en)) for en, zh, check in GLOSSARY]
 
 
-class TranslationError(RuntimeError):
-    """Raised when the translation service is unavailable or returns an unusable answer."""
+TranslationError = llm.LLMError
+_FATAL_ERRORS = ("认证失败", "未配置", "无法连接", "余额不足")
 
 
 def is_configured() -> bool:
-    return bool(config.TRANSLATE_API_KEY and config.TRANSLATE_API_BASE and config.TRANSLATE_MODEL)
+    return llm.is_configured()
 
 
 def source_hash(title: str, abstract: str) -> str:
@@ -308,40 +307,8 @@ def build_user_message(title: str, abstract: str) -> str:
     return "\n".join(lines)
 
 
-_response_format_supported: dict[str, bool] = {}
-
-
-def _post(url: str, payload: dict[str, Any], client: HttpClient) -> httpx.Response:
-    headers = {"Authorization": f"Bearer {config.TRANSLATE_API_KEY}", "Content-Type": "application/json"}
-    try:
-        return client.post(url, json=payload, headers=headers, timeout=config.TRANSLATE_TIMEOUT)
-    except httpx.HTTPStatusError as exc:
-        if exc.response.status_code in (401, 403):
-            raise TranslationError("翻译接口认证失败，请检查 TRANSLATE_API_KEY") from exc
-        raise TranslationError(f"翻译接口返回 HTTP {exc.response.status_code}: {exc.response.text[:200]}") from exc
-    except httpx.TransportError as exc:
-        raise TranslationError(f"无法连接翻译接口 {config.TRANSLATE_API_BASE}: {exc}") from exc
-
-
-def _chat(messages: list[dict[str, str]], client: HttpClient) -> str:
-    url = config.TRANSLATE_API_BASE.rstrip("/") + "/chat/completions"
-    payload: dict[str, Any] = {"model": config.TRANSLATE_MODEL, "temperature": 0, "messages": messages}
-    if _response_format_supported.get(url, True):
-        try:
-            resp = _post(url, {**payload, "response_format": {"type": "json_object"}}, client)
-        except TranslationError as exc:
-            cause = exc.__cause__
-            if not (isinstance(cause, httpx.HTTPStatusError) and cause.response.status_code == 400):
-                raise
-            logger.info("Endpoint rejected response_format; retrying without it")
-            resp = _post(url, payload, client)
-            _response_format_supported[url] = False
-    else:
-        resp = _post(url, payload, client)
-    try:
-        return resp.json()["choices"][0]["message"]["content"] or ""
-    except (ValueError, KeyError, IndexError, TypeError) as exc:
-        raise TranslationError(f"翻译接口返回格式无法识别: {resp.text[:200]}") from exc
+def _chat(messages: list[dict[str, str]], client: HttpClient | None) -> str:
+    return llm.chat(messages, temperature=0, json_mode=True, client=client)
 
 
 def parse_output(content: str) -> tuple[str, str]:
@@ -359,9 +326,7 @@ def parse_output(content: str) -> tuple[str, str]:
 
 def translate_text(title: str, abstract: str, client: HttpClient | None = None) -> dict[str, Any]:
     """Translate one title/abstract pair, verify it and retry once with the detected problems."""
-    if not is_configured():
-        raise TranslationError("未配置翻译接口：请在 .env 中设置 TRANSLATE_API_KEY（以及 TRANSLATE_API_BASE、TRANSLATE_MODEL）")
-    client = client or get_client()
+    llm._require_config()
     title = normalize_text(title)
     abstract = normalize_text(abstract)
     messages = [
@@ -390,7 +355,7 @@ def translate_text(title: str, abstract: str, client: HttpClient | None = None) 
         "needs_review": bool(issues),
         "issues": issues,
         "attempts": attempts,
-        "model": config.TRANSLATE_MODEL,
+        "model": config.LLM_MODEL,
         "source_hash": source_hash(title, abstract),
         "translated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "reviewed": False,
@@ -483,7 +448,7 @@ def translate_papers(
             stats["failed"] += 1
             stats["errors"].append(f"{paper.get('id')}: {exc}")
             logger.warning("Translation failed for %s: %s", paper.get("id"), exc)
-            if "认证失败" in str(exc) or "未配置" in str(exc) or "无法连接" in str(exc):
+            if any(marker in str(exc) for marker in _FATAL_ERRORS):
                 break
             continue
         stats["translated"] += 1

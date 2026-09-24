@@ -20,9 +20,13 @@ categorizer.py ── 19 个主题，带权重、词边界、标题加倍；每�
    ▼
 storage.py ── papers/papers.json（数据库）· papers/state.json（各数据源上次成功日期、上次新增 ID）
    ▼
-translator.py ── 新论文标题/摘要的中文学术翻译 → papers/translations.json（未配置 TRANSLATE_API_KEY 时跳过）
+translator.py ── 新论文标题/摘要的中文学术翻译 → papers/translations.json（未配置 LLM_API_KEY 时跳过）
    ▼
-readme_generator.py (README.md + docs/papers/*.md) · summarizer.py + email_notifier.py (邮件摘要) · web_app.py (本地 GUI) · cli.py
+readme_generator.py (README.md + docs/papers/*.md) · summarizer.py + email_notifier.py (邮件摘要) · web_app.py + web/ (本地网页) · cli.py
+
+AI 研读助手（网页“AI 解读 / 研读清单 / AI 讨论”，命令行 ai、ask）：
+llm.py（OpenAI 兼容接口，默认 DeepSeek，流式输出）· fulltext.py（Europe PMC / arXiv 开放全文）
+· retrieval.py（本地文献库 BM25 检索）· assistant.py（解读、多篇总结、对比、综述、研究空白、讨论）· notes.py（ai_notes/ Markdown 笔记）
 ```
 
 ## 关键设计
@@ -37,10 +41,23 @@ readme_generator.py (README.md + docs/papers/*.md) · summarizer.py + email_noti
 | 经典论文缺失 | 首次运行（或 `--backfill`）按相关性排序检索全部年份；`papers/curated_dois.txt` 保证里程碑论文被收录 |
 | 规则调整后旧数据不一致 | 每次运行都会对全库重新打分、分类，不再满足条件的记录被移除；也可 `python -m genome_literature rebuild` |
 
+## AI 研读助手
+
+模型接口由 `llm.py` 统一管理：任意 OpenAI 兼容的 chat-completions 接口（默认 DeepSeek，可换通义千问、Moonshot 或本地部署模型）。
+在网页右上角“设置 AI”中填写 API Key 即可（写入本机 `.env` 的 `LLM_API_KEY`、`LLM_API_BASE`、`LLM_MODEL`、`LLM_REASONING_MODEL`，
+也兼容 `DEEPSEEK_API_KEY`）；勾选“深度思考”时使用推理模型（如 deepseek-reasoner）。
+
+| 功能 | 做法 |
+| --- | --- |
+| AI 解读（单篇） | 对有 PMCID 的开放获取论文从 Europe PMC 获取 JATS 全文，arXiv 预印本从 arxiv.org/html 获取全文；按章节提取正文、图注与表格，结果/讨论优先、方法次之地压缩到 `AI_FULLTEXT_CHARS`；无全文时仅用摘要并在开头声明 |
+| 多篇总结 / 对比分析 / 撰写综述 / 研究空白 / 就焦点提问 | 研读清单中的文献按 [1]…[n] 编号提供给模型；超过 `AI_CONTEXT_CHARS` 时先分批逐篇提炼要点（并行），再综合 |
+| AI 讨论 | 多轮对话，范围可选研读清单、当前筛选结果或整个文献库；后两者每轮先由模型把问题改写为英文检索词（失败时用术语表把中文术语映射为英文），再用 BM25 从本地库检索最相关的文献加入上下文，编号在整段对话中保持不变 |
+| 防止编造 | 系统提示要求只依据材料、每个论断标注 [n]、材料外的背景知识须标注“（背景知识）”；生成后逐一核对引用编号，越界编号给出警告，参考文献列表由数据库元数据生成而非模型输出 |
+| 笔记 | 每次解读/总结/综述自动保存为 `ai_notes/*.md`（含参考文献），可在“我的笔记”中查看、下载；对话可手动保存 |
+
 ## 中文学术翻译
 
-`translator.py` 调用任意 OpenAI 兼容的 chat-completions 接口（默认 DeepSeek，可换通义千问、Moonshot 或本地部署模型），
-通过 `.env` 中的 `TRANSLATE_API_KEY`、`TRANSLATE_API_BASE`、`TRANSLATE_MODEL` 配置。为保证译文准确：
+`translator.py` 复用 `llm.py` 的模型设置。为保证译文准确：
 
 1. **术语表约束**：`GLOSSARY` 收录 3D 基因组、表观遗传与深度学习常用术语（如 topologically associating domain → 拓扑关联结构域、
    loop extrusion → 环挤出、cohesin → 黏连蛋白），论文中出现的术语随请求一并发送，并在译文中逐条核验。
@@ -70,4 +87,4 @@ readme_generator.py (README.md + docs/papers/*.md) · summarizer.py + email_noti
 - `.github/workflows/update.yml`：每周一运行增量更新，提交 `papers/`、`README.md`、`docs/papers/`；手动触发时可勾选 backfill。
 - `.github/workflows/ci.yml`：在 Python 3.9 与 3.12 上运行测试。
 - 可选 Secrets：`NCBI_API_KEY`、`NCBI_EMAIL`、`SEMANTIC_SCHOLAR_API_KEY`、`SMTP_*`、`EMAIL_FROM`、`EMAIL_RECIPIENTS`、
-  `TRANSLATE_API_KEY`、`TRANSLATE_API_BASE`、`TRANSLATE_MODEL`（配置后每周更新会自动翻译新论文）。
+  `LLM_API_KEY`、`LLM_API_BASE`、`LLM_MODEL`（配置后每周更新会自动翻译新论文）。

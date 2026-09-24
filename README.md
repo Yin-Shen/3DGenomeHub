@@ -189,8 +189,8 @@ Hand-picked foundational papers (edit `papers/curated_dois.txt` to change this l
 ## Usage
 
 **Web app** (Windows / macOS / Linux, Python 3.9+): `python run.py` — installs dependencies on first run and
-opens <http://localhost:8686> with search, filters, landscape analysis and one-click updates.
-On Windows, `build_exe.bat` builds a standalone `dist/3DGenomeHub.exe`.
+opens <http://localhost:8686>: search and filters, one-click updates, bilingual display and the AI reading
+assistant. On Windows, `build_exe.bat` builds a standalone `dist/3DGenomeHub.exe`.
 
 **Command line**
 
@@ -206,6 +206,9 @@ python -m genome_literature rebuild               # re-score and re-categorize a
 python -m genome_literature serve                 # web GUI
 python -m genome_literature translate --ml -n 50  # academic Chinese translation (see below)
 python -m genome_literature translate-text "Title" "Abstract"
+python -m genome_literature ask "单细胞 Hi-C 数据增强有哪些深度学习方法？"
+python -m genome_literature ai review --query "loop extrusion cohesin" -n 40 -o review.md
+python -m genome_literature ai interpret --id 10.1038/s41592-020-0958-x
 ```
 
 **How papers are selected.** Topic queries (`SEARCH_TOPICS` in `config.py`) run against PubMed, Europe PMC
@@ -215,8 +218,16 @@ pass a weighted threshold, with penalties for look-alikes (Hi-C genome-assembly 
 maps, transactivation domains). Records are merged across databases by DOI, PMID, arXiv ID and normalized
 title, then tagged with an AI/ML track, architecture families (CNN, Transformer, GNN, …) and up to three topics.
 
-**Chinese academic translation (中文学术翻译).** Set `TRANSLATE_API_KEY` (plus `TRANSLATE_API_BASE` and
-`TRANSLATE_MODEL` for providers other than DeepSeek; any OpenAI-compatible API works) in `.env`. Titles and
+**AI reading assistant (AI 研读助手).** Enter a DeepSeek API key under **设置 AI** in the web app (saved to the
+local `.env` as `LLM_API_KEY`; `LLM_API_BASE` / `LLM_MODEL` / `LLM_REASONING_MODEL` select any OpenAI-compatible
+provider). Then use **AI 解读** on a paper (structured interpretation, from the open-access full text via Europe
+PMC or arXiv when available, otherwise from the abstract), add papers to the **研读清单** for multi-paper
+summaries, comparison tables, literature-review drafts and research-gap analysis, or open **AI 讨论** to ask
+questions about the reading list, the current filter results or the whole library (relevant papers are retrieved
+first). Answers must cite the supplied papers as [n]; citations are checked and the reference list is generated
+from the database. Every result is saved as Markdown in `ai_notes/` (**我的笔记**).
+
+**Chinese academic translation (中文学术翻译).** Uses the same model settings. Titles and
 abstracts are translated with a curated 3D-genome / deep-learning glossary at temperature 0; every result is
 checked automatically (acronyms, gene and tool names, numbers, glossary terms, completeness) and corrected once
 if needed. Translations that still fail a check are marked 译文待校对 for manual proofreading. Results are cached
@@ -225,8 +236,8 @@ in `papers/translations.json`; set `"reviewed": true` on a corrected entry to lo
 
 **Automation.** `.github/workflows/update.yml` runs every Monday, commits `papers/`, this README and
 `docs/papers/`, and emails a digest when SMTP secrets are set. Optional secrets: `NCBI_API_KEY`,
-`NCBI_EMAIL`, `SEMANTIC_SCHOLAR_API_KEY`, `SMTP_*`, `EMAIL_FROM`, `EMAIL_RECIPIENTS`, `TRANSLATE_API_KEY`,
-`TRANSLATE_API_BASE`, `TRANSLATE_MODEL` (see `.env.example`).
+`NCBI_EMAIL`, `SEMANTIC_SCHOLAR_API_KEY`, `SMTP_*`, `EMAIL_FROM`, `EMAIL_RECIPIENTS`, `LLM_API_KEY`,
+`LLM_API_BASE`, `LLM_MODEL` (see `.env.example`); with an API key, new papers are translated automatically.
 
 Architecture notes: [docs/architecture.md](docs/architecture.md) · Landmark papers: `papers/curated_dois.txt`
 

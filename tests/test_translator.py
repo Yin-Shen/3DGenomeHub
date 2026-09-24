@@ -8,6 +8,7 @@ import pytest
 
 from conftest import make_client
 from genome_literature import config, pipeline, translator
+from genome_literature import llm as llm_client
 from genome_literature.email_notifier import render_email_html
 from genome_literature.readme_generator import write_outputs
 from genome_literature.records import new_record
@@ -51,10 +52,10 @@ class FakeLLM:
 
 @pytest.fixture
 def configured(tmp_project, monkeypatch):
-    monkeypatch.setattr(config, "TRANSLATE_API_KEY", "sk-test")
-    monkeypatch.setattr(config, "TRANSLATE_API_BASE", "https://llm.example.org/v1")
-    monkeypatch.setattr(config, "TRANSLATE_MODEL", "test-model")
-    monkeypatch.setattr(translator, "_response_format_supported", {})
+    monkeypatch.setattr(config, "LLM_API_KEY", "sk-test")
+    monkeypatch.setattr(config, "LLM_API_BASE", "https://llm.example.org/v1")
+    monkeypatch.setattr(config, "LLM_MODEL", "test-model")
+    monkeypatch.setattr(llm_client, "_json_mode_supported", {})
     return tmp_project
 
 
@@ -140,7 +141,7 @@ def test_errors_are_reported_clearly(configured, monkeypatch):
         translator.translate_text(TITLE, ABSTRACT, client=make_client(FakeLLM(GOOD, status=401)))
     with pytest.raises(translator.TranslationError, match="JSON"):
         translator.translate_text(TITLE, ABSTRACT, client=make_client(FakeLLM("抱歉，无法翻译。")))
-    monkeypatch.setattr(config, "TRANSLATE_API_KEY", "")
+    monkeypatch.setattr(config, "LLM_API_KEY", "")
     with pytest.raises(translator.TranslationError, match="未配置"):
         translator.translate_text(TITLE, ABSTRACT, client=make_client(FakeLLM(GOOD)))
 
@@ -242,7 +243,7 @@ def test_web_translate_endpoint(configured, monkeypatch):
     web_app._cache.update(mtime=None, papers=[])
     web_app._tr_cache.update(mtime=None, data={})
     llm = FakeLLM(GOOD)
-    monkeypatch.setattr(translator, "get_client", lambda: make_client(llm))
+    monkeypatch.setattr(llm_client, "get_client", lambda: make_client(llm))
     srv = web_app.make_server("127.0.0.1", 0)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{srv.server_address[1]}"
@@ -255,9 +256,11 @@ def test_web_translate_endpoint(configured, monkeypatch):
             shown = json.loads(r.read())[0]
         assert shown["title_zh"] == GOOD["title_zh"] and shown["abstract_zh"] == GOOD["abstract_zh"]
         with urllib.request.urlopen(base + "/api/stats", timeout=10) as r:
-            assert json.loads(r.read())["translation"] == {"configured": True, "model": "test-model", "translated": 1}
+            stats = json.loads(r.read())
+        assert stats["translated"] == 1 and stats["ai"]["configured"] and stats["ai"]["model"] == "test-model"
+        assert "sk-test" not in json.dumps(stats)
         assert _post(base + "/api/translate", {"id": "missing"})["ok"] is False
-        monkeypatch.setattr(config, "TRANSLATE_API_KEY", "")
+        monkeypatch.setattr(config, "LLM_API_KEY", "")
         assert _post(base + "/api/translate-batch", {"ids": [paper["id"]]})["ok"] is False
     finally:
         srv.shutdown()

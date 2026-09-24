@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3D Genome × Deep Learning 文献研读</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="logo">3D</div>
+    <div>
+      <h1>3D Genome × Deep Learning</h1>
+      <p>三维基因组与深度学习文献研读平台</p>
+    </div>
+  </div>
+  <div class="top-actions">
+    <button class="pill off" id="aiPill" title="AI 接口设置"><span class="led"></span><span id="aiPillText">设置 AI</span></button>
+    <button class="btn filters-toggle" id="filtersToggle">筛选</button>
+    <button class="btn primary" data-act="/api/fetch" title="检索上次更新以来的新文献，过滤、合并并保存">更新文献</button>
+    <div class="menu" id="moreMenu">
+      <button class="btn" id="moreBtn">更多 ▾</button>
+      <div class="menu-list">
+        <button data-act="/api/run-pipeline">更新 + 重建 README + 发送邮件</button>
+        <button data-act="/api/backfill">回溯检索全部年份（较慢）</button>
+        <button data-act="/api/update-readme">重建 README 与主题页</button>
+        <button data-act="/api/send-email">发送邮件摘要</button>
+        <hr>
+        <a href="/api/export?format=csv">导出 CSV</a>
+        <a href="/api/export?format=bib">导出 BibTeX</a>
+        <hr>
+        <button id="menuSettings">AI 设置</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="filters" id="filters">
+    <div class="fbox">
+      <h3>研究类型</h3>
+      <div class="chips" id="tracks"></div>
+    </div>
+    <div class="fbox">
+      <h3>研究主题</h3>
+      <div class="facet" id="cats"></div>
+    </div>
+    <div class="fbox">
+      <h3>模型架构</h3>
+      <div class="facet" id="methods" style="max-height:220px"></div>
+    </div>
+    <div class="fbox">
+      <h3>更多条件</h3>
+      <label class="f">数据库</label>
+      <select id="source"><option value="">全部数据库</option></select>
+      <label class="f">年份</label>
+      <div class="row"><select id="yFrom"><option value="">起</option></select><select id="yTo"><option value="">止</option></select></div>
+      <label class="check"><input type="checkbox" id="onlyNew"> 最近一次更新新增</label>
+      <label class="check"><input type="checkbox" id="onlyPre"> 仅预印本</label>
+      <label class="check"><input type="checkbox" id="onlyCur"> 仅里程碑文献</label>
+      <label class="check"><input type="checkbox" id="onlyAbs"> 仅有摘要</label>
+      <label class="check"><input type="checkbox" id="onlyPicked"> 仅研读清单</label>
+      <button class="btn" id="reset" style="margin-top:12px;width:100%;justify-content:center">清除筛选</button>
+    </div>
+  </aside>
+
+  <main>
+    <div class="statusbar" id="statusbar" hidden><span class="dot" id="dot"></span><span class="msg" id="msg"></span><button id="logBtn">日志</button><button id="hideStatus">收起</button></div>
+    <div id="log"></div>
+    <div class="searchbar">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input type="search" id="q" placeholder='搜索标题、摘要、作者、期刊、标签，如 Hi-C transformer、"loop extrusion"、单细胞'>
+    </div>
+    <div class="toolbar">
+      <span id="info">加载中…</span>
+      <span class="right">
+        <label class="check" title="在英文下方显示中文学术翻译"><input type="checkbox" id="showZh"> 中英对照</label>
+        <button class="btn small" id="btnTrPage" title="将本页论文的标题与摘要翻译为中文">翻译本页</button>
+        <button class="btn small" id="btnPickPage" title="将本页全部论文加入研读清单">本页加入研读</button>
+        <select id="sort">
+          <option value="relevance">按相关度</option>
+          <option value="newest">最新优先</option>
+          <option value="oldest">最早优先</option>
+          <option value="cited">被引最多</option>
+          <option value="title">按标题</option>
+        </select>
+      </span>
+    </div>
+    <div id="list"></div>
+    <div class="pager" id="pager"></div>
+    <footer>3DGenomeHub <span id="ver"></span> · <a href="https://github.com/Yin-Shen/3DGenomeHub" target="_blank" rel="noopener">GitHub</a></footer>
+  </main>
+
+  <section class="ai-panel" id="aiPanel" aria-label="AI 研读助手">
+    <div class="ai-head">
+      <h2><span class="spark">✦</span> AI 研读助手 <button class="close-drawer" id="closeDrawer" aria-label="关闭">×</button></h2>
+      <div class="tabs">
+        <button class="tab on" data-tab="basket">研读清单 <span class="count" id="basketCount">0</span></button>
+        <button class="tab" data-tab="chat">AI 讨论</button>
+        <button class="tab" data-tab="notes">我的笔记 <span class="count" id="notesCount">0</span></button>
+      </div>
+    </div>
+
+    <div class="pane on" id="pane-basket">
+      <p class="hint">勾选论文卡片上的“加入研读”，或在下方批量添加。AI 会严格依据所选文献作答，并用 [编号] 标注出处。</p>
+      <div class="basket" id="basket"></div>
+      <div class="basket-tools">
+        <button class="btn small" id="addTop">加入当前结果前 20 篇</button>
+        <button class="btn small ghost" id="clearBasket">清空</button>
+      </div>
+      <div class="section-title">研究焦点 / 问题（可选）</div>
+      <textarea id="taskFocus" placeholder="例如：比较这些方法在单细胞 Hi-C 数据增强上的思路与性能；或：这些研究对 TAD 形成机制有什么共识？"></textarea>
+      <div class="section-title">让 AI 帮你</div>
+      <div class="task-grid">
+        <button class="task" data-task="summary"><b>多篇总结</b><span>归纳主题、共识与分歧</span></button>
+        <button class="task" data-task="compare"><b>对比分析</b><span>方法、数据、结果对比表</span></button>
+        <button class="task" data-task="review"><b>撰写综述</b><span>结构化中文综述初稿</span></button>
+        <button class="task" data-task="gaps"><b>研究空白与选题</b><span>未解决问题与可行方向</span></button>
+        <button class="task" data-task="ask"><b>就焦点提问</b><span>基于所选文献回答问题</span></button>
+        <button class="task" data-task="discuss"><b>与 AI 讨论</b><span>围绕所选文献多轮对话</span></button>
+      </div>
+      <div class="opts">
+        <label class="check" title="使用推理模型（如 deepseek-reasoner），分析更深入但更慢"><input type="checkbox" id="optDeep"> 深度思考（推理模型，较慢）</label>
+        <label class="check" title="对开放获取论文自动获取 Europe PMC / arXiv 全文；文献不超过 5 篇时生效"><input type="checkbox" id="optFull"> 尽量使用全文（≤5 篇时）</label>
+      </div>
+    </div>
+
+    <div class="pane" id="pane-chat">
+      <div class="chat-top">
+        <select id="chatScope" title="AI 讨论所依据的文献范围">
+          <option value="selection">依据：研读清单</option>
+          <option value="library">依据：整个文献库（自动检索）</option>
+          <option value="filtered">依据：当前筛选结果（自动检索）</option>
+        </select>
+        <button class="btn small" id="chatNew">新对话</button>
+        <button class="btn small" id="chatSave">保存</button>
+      </div>
+      <details class="chat-ctx" id="chatCtx" hidden><summary id="chatCtxSum"></summary><ol id="chatCtxList"></ol></details>
+      <div class="chat-log" id="chatLog"></div>
+    </div>
+
+    <div class="pane" id="pane-notes">
+      <p class="hint" style="margin-bottom:10px">AI 生成的解读、总结、综述与保存的对话，均以 Markdown 文件保存在项目的 ai_notes/ 目录。</p>
+      <div id="notesList"></div>
+    </div>
+
+    <form class="chat-input" id="chatForm">
+      <textarea id="chatInput" placeholder="向 AI 提问…（Enter 发送，Shift+Enter 换行）"></textarea>
+      <div class="row">
+        <label class="check" style="margin:0"><input type="checkbox" id="chatDeep"> 深度思考</label>
+        <span><button type="button" class="btn small" id="chatStop" hidden>停止</button> <button class="btn primary small" id="chatSend">发送</button></span>
+      </div>
+    </form>
+  </section>
+</div>
+
+<button class="fab" id="fab">✦ AI 研读助手 <span class="count" id="fabCount">0</span></button>
+
+<div class="overlay" id="reader">
+  <div class="sheet">
+    <div class="reader-head">
+      <button class="x-close" id="rClose" aria-label="关闭">×</button>
+      <div class="reader-kind" id="rKind"></div>
+      <h2 id="rTitle"></h2>
+      <div class="reader-meta" id="rMeta"></div>
+      <div class="reader-tools">
+        <button class="btn small" id="rStop" hidden>停止生成</button>
+        <button class="btn small" id="rCopy">复制</button>
+        <button class="btn small" id="rDownload">下载 Markdown</button>
+        <button class="btn small" id="rRegen">重新生成</button>
+        <button class="btn small primary" id="rDiscuss">继续追问</button>
+      </div>
+    </div>
+    <div class="reader-body">
+      <div class="reader-status" id="rStatus"></div>
+      <details class="think" id="rThinkWrap" hidden><summary>思考过程</summary><div id="rThink"></div></details>
+      <article class="md" id="rBody"></article>
+      <div id="rWarn"></div>
+      <section class="refs" id="rRefs" hidden></section>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="settings">
+  <div class="sheet small form">
+    <button class="x-close" id="sClose" aria-label="关闭">×</button>
+    <h2>AI 设置</h2>
+    <p class="hint" style="margin-top:6px">用于 AI 解读、讨论、综述与中文翻译。支持 DeepSeek 及其他 OpenAI 兼容接口。密钥只保存在本机项目目录的 .env 文件中。</p>
+    <div class="warn" id="sNotice" hidden></div>
+    <label>服务商</label>
+    <select id="sPreset"></select>
+    <label>API Key <span class="sub" id="sKeyHint"></span></label>
+    <input type="password" id="sKey" autocomplete="off" placeholder="sk-…（留空表示不修改已保存的密钥）">
+    <label>API 地址（Base URL）</label>
+    <input type="text" id="sBase" placeholder="https://api.deepseek.com">
+    <label>对话模型</label>
+    <input type="text" id="sModel" placeholder="deepseek-chat">
+    <label>深度思考模型 <span class="sub">可选，勾选“深度思考”时使用</span></label>
+    <input type="text" id="sReason" placeholder="deepseek-reasoner">
+    <div class="actions">
+      <button type="button" class="btn" id="sSaveOnly">仅保存</button>
+      <button type="button" class="btn primary" id="sSave">保存并测试连接</button>
+    </div>
+    <div class="result" id="sResult"></div>
+  </div>
+</div>
+
+<div class="popover" id="popover"></div>
+<div class="toast" id="toast"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

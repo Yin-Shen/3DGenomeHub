@@ -14,6 +14,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 load_dotenv()
 
 # ---------------------------------------------------------------------------
@@ -25,6 +26,10 @@ PAPERS_JSON = PAPERS_DIR / "papers.json"
 NEW_PAPERS_JSON = PAPERS_DIR / "new_papers.json"
 STATE_JSON = PAPERS_DIR / "state.json"
 TRANSLATIONS_JSON = PAPERS_DIR / "translations.json"
+AI_NOTES_DIR = PROJECT_ROOT / "ai_notes"
+CACHE_DIR = PROJECT_ROOT / ".cache"
+FULLTEXT_CACHE_DIR = CACHE_DIR / "fulltext"
+ENV_FILE = PROJECT_ROOT / ".env"
 CURATED_DOIS_FILE = PAPERS_DIR / "curated_dois.txt"
 TEMPLATE_DIR = PROJECT_ROOT / "templates"
 README_PATH = PROJECT_ROOT / "README.md"
@@ -615,15 +620,58 @@ EMAIL_RECIPIENTS = [
 EMAIL_MAX_PAPERS = 60
 
 # ---------------------------------------------------------------------------
-# Chinese academic translation (any OpenAI-compatible chat-completions API)
-# Examples:  DeepSeek  https://api.deepseek.com                              deepseek-chat
-#            Qwen      https://dashscope.aliyuncs.com/compatible-mode/v1     qwen-max
-#            Moonshot  https://api.moonshot.cn/v1                            (model name from provider)
+# Large language model (AI reading assistant and Chinese translation)
+# Any OpenAI-compatible chat-completions API works:
+#   DeepSeek  https://api.deepseek.com                            deepseek-chat / deepseek-reasoner
+#   Qwen      https://dashscope.aliyuncs.com/compatible-mode/v1   qwen-max
+#   Moonshot  https://api.moonshot.cn/v1                          (model name from the provider)
+# The web app can edit these settings; they are saved to ENV_FILE.
 # ---------------------------------------------------------------------------
-TRANSLATE_API_BASE = os.getenv("TRANSLATE_API_BASE", "https://api.deepseek.com") or "https://api.deepseek.com"
-TRANSLATE_API_KEY = os.getenv("TRANSLATE_API_KEY", "")
-TRANSLATE_MODEL = os.getenv("TRANSLATE_MODEL", "deepseek-chat") or "deepseek-chat"
-TRANSLATE_TIMEOUT = float(os.getenv("TRANSLATE_TIMEOUT", "120") or 120)
+DEFAULT_LLM_BASE = "https://api.deepseek.com"
+DEFAULT_LLM_MODEL = "deepseek-chat"
+DEFAULT_LLM_REASONING_MODEL = "deepseek-reasoner"
+LLM_SETTING_KEYS = ("LLM_API_KEY", "LLM_API_BASE", "LLM_MODEL", "LLM_REASONING_MODEL")
+
+LLM_API_KEY = ""
+LLM_API_BASE = DEFAULT_LLM_BASE
+LLM_MODEL = DEFAULT_LLM_MODEL
+LLM_REASONING_MODEL = DEFAULT_LLM_REASONING_MODEL
+
+
+def _env(*names: str, default: str = "") -> str:
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return default
+
+
+def reload_llm_settings() -> None:
+    """(Re)read the model settings from the environment (DEEPSEEK_* and TRANSLATE_* are accepted aliases)."""
+    global LLM_API_KEY, LLM_API_BASE, LLM_MODEL, LLM_REASONING_MODEL
+    LLM_API_KEY = _env("LLM_API_KEY", "DEEPSEEK_API_KEY", "TRANSLATE_API_KEY")
+    LLM_API_BASE = _env("LLM_API_BASE", "TRANSLATE_API_BASE", default=DEFAULT_LLM_BASE)
+    LLM_MODEL = _env("LLM_MODEL", "TRANSLATE_MODEL", default=DEFAULT_LLM_MODEL)
+    LLM_REASONING_MODEL = _env("LLM_REASONING_MODEL", default=DEFAULT_LLM_REASONING_MODEL)
+
+
+reload_llm_settings()
+
+LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "180") or 180)
+LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "8192") or 8192)
+LLM_REASONING_MAX_TOKENS = int(os.getenv("LLM_REASONING_MAX_TOKENS", "32768") or 32768)
+
+# AI reading assistant
+AI_CONTEXT_CHARS = int(os.getenv("AI_CONTEXT_CHARS", "120000") or 120000)
+AI_FULLTEXT_CHARS = int(os.getenv("AI_FULLTEXT_CHARS", "60000") or 60000)
+AI_FULLTEXT_MAX_PAPERS = 5
+AI_MAX_PAPERS = 200
+AI_BATCH_CHARS = 45000
+AI_LIBRARY_TOP_K = 15
+AI_CHAT_CONTEXT_MAX = 40
+FULLTEXT_CACHE_DAYS_MISSING = 14
+
+# Chinese academic translation
 TRANSLATE_NEW_PAPERS = os.getenv("TRANSLATE_NEW_PAPERS", "1").strip().lower() not in ("0", "false", "no", "off")
 TRANSLATE_MAX_PER_RUN = int(os.getenv("TRANSLATE_MAX_PER_RUN", "100") or 100)
 TRANSLATE_MIN_LENGTH_RATIO = 0.2
