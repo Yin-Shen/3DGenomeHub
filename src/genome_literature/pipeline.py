@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any, Callable, Iterable
 
-from . import config
+from . import config, translator
 from .categorizer import categorize_papers
 from .email_notifier import send_digest_email
 from .fetcher import fetch_all_papers
@@ -140,6 +140,15 @@ def run_pipeline(
     })
     state["runs"] = runs[-30:]
     save_state(state)
+
+    if new_papers and translator.is_configured() and config.TRANSLATE_NEW_PAPERS:
+        queue = sorted(new_papers, key=lambda p: (p.get("track") == "ml", p.get("relevance", 0)), reverse=True)
+        step(f"Translating up to {config.TRANSLATE_MAX_PER_RUN} new papers into Chinese")
+        try:
+            result["translation"] = translator.translate_papers(queue, limit=config.TRANSLATE_MAX_PER_RUN, progress=progress)
+        except Exception as exc:
+            logger.exception("Translation step failed")
+            result["translation"] = {"translated": 0, "failed": len(queue), "errors": [str(exc)]}
 
     digest = generate_digest(new_papers, all_papers)
     result["digest_summary"] = digest["summary_text"]

@@ -138,6 +138,7 @@ copy templates\email_digest.html dist\templates\ >nul 2>&1
 copy papers\curated_dois.txt dist\papers\ >nul 2>&1
 if exist papers\papers.json copy papers\papers.json dist\papers\ >nul 2>&1
 if exist papers\state.json copy papers\state.json dist\papers\ >nul 2>&1
+if exist papers\translations.json copy papers\translations.json dist\papers\ >nul 2>&1
 copy .env.example dist\ >nul 2>&1
 
 echo.

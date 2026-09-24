@@ -101,6 +101,21 @@ def merge_papers(
     return index.papers, actually_new
 
 
+def load_json(path: Path, default: Any) -> Any:
+    """Read a JSON file, returning ``default`` when it is missing or unreadable."""
+    if not path.exists():
+        return default
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        logger.exception("Failed to read %s", path)
+        return default
+
+
+def save_json(path: Path, data: Any) -> None:
+    _atomic_write_json(path, data)
+
+
 def _atomic_write_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))

@@ -24,6 +24,7 @@ PAPERS_DIR = PROJECT_ROOT / "papers"
 PAPERS_JSON = PAPERS_DIR / "papers.json"
 NEW_PAPERS_JSON = PAPERS_DIR / "new_papers.json"
 STATE_JSON = PAPERS_DIR / "state.json"
+TRANSLATIONS_JSON = PAPERS_DIR / "translations.json"
 CURATED_DOIS_FILE = PAPERS_DIR / "curated_dois.txt"
 TEMPLATE_DIR = PROJECT_ROOT / "templates"
 README_PATH = PROJECT_ROOT / "README.md"
@@ -612,6 +613,21 @@ EMAIL_RECIPIENTS = [
     if addr.strip()
 ]
 EMAIL_MAX_PAPERS = 60
+
+# ---------------------------------------------------------------------------
+# Chinese academic translation (any OpenAI-compatible chat-completions API)
+# Examples:  DeepSeek  https://api.deepseek.com                              deepseek-chat
+#            Qwen      https://dashscope.aliyuncs.com/compatible-mode/v1     qwen-max
+#            Moonshot  https://api.moonshot.cn/v1                            (model name from provider)
+# ---------------------------------------------------------------------------
+TRANSLATE_API_BASE = os.getenv("TRANSLATE_API_BASE", "https://api.deepseek.com") or "https://api.deepseek.com"
+TRANSLATE_API_KEY = os.getenv("TRANSLATE_API_KEY", "")
+TRANSLATE_MODEL = os.getenv("TRANSLATE_MODEL", "deepseek-chat") or "deepseek-chat"
+TRANSLATE_TIMEOUT = float(os.getenv("TRANSLATE_TIMEOUT", "120") or 120)
+TRANSLATE_NEW_PAPERS = os.getenv("TRANSLATE_NEW_PAPERS", "1").strip().lower() not in ("0", "false", "no", "off")
+TRANSLATE_MAX_PER_RUN = int(os.getenv("TRANSLATE_MAX_PER_RUN", "100") or 100)
+TRANSLATE_MIN_LENGTH_RATIO = 0.2
+TRANSLATE_MAX_LENGTH_RATIO = 1.1
 
 # ---------------------------------------------------------------------------
 # Web GUI

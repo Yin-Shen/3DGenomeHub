@@ -20,6 +20,8 @@ categorizer.py ── 19 个主题，带权重、词边界、标题加倍；每�
    ▼
 storage.py ── papers/papers.json（数据库）· papers/state.json（各数据源上次成功日期、上次新增 ID）
    ▼
+translator.py ── 新论文标题/摘要的中文学术翻译 → papers/translations.json（未配置 TRANSLATE_API_KEY 时跳过）
+   ▼
 readme_generator.py (README.md + docs/papers/*.md) · summarizer.py + email_notifier.py (邮件摘要) · web_app.py (本地 GUI) · cli.py
 ```
 
@@ -35,6 +37,27 @@ readme_generator.py (README.md + docs/papers/*.md) · summarizer.py + email_noti
 | 经典论文缺失 | 首次运行（或 `--backfill`）按相关性排序检索全部年份；`papers/curated_dois.txt` 保证里程碑论文被收录 |
 | 规则调整后旧数据不一致 | 每次运行都会对全库重新打分、分类，不再满足条件的记录被移除；也可 `python -m genome_literature rebuild` |
 
+## 中文学术翻译
+
+`translator.py` 调用任意 OpenAI 兼容的 chat-completions 接口（默认 DeepSeek，可换通义千问、Moonshot 或本地部署模型），
+通过 `.env` 中的 `TRANSLATE_API_KEY`、`TRANSLATE_API_BASE`、`TRANSLATE_MODEL` 配置。为保证译文准确：
+
+1. **术语表约束**：`GLOSSARY` 收录 3D 基因组、表观遗传与深度学习常用术语（如 topologically associating domain → 拓扑关联结构域、
+   loop extrusion → 环挤出、cohesin → 黏连蛋白），论文中出现的术语随请求一并发送，并在译文中逐条核验。
+2. **确定性输出**：temperature = 0，要求只输出 JSON（`title_zh`、`abstract_zh`），系统提示规定忠实完整、不增删、
+   结构化摘要小标题统一为“背景：/方法：/结果：/结论：”，术语参照全国科学技术名词审定委员会规范。
+3. **自动校验**：原文中的缩写、基因/蛋白/工具名（CTCF、Hi-C、C.Origami…）与全部数值必须原样出现在译文中；
+   术语须按术语表翻译；译文须为中文且长度比例合理（识别漏译、增译）。
+4. **纠错重译**：校验未通过时把问题逐条反馈给模型重译一次；仍未通过的译文标记 `needs_review`，
+   在网页中显示“译文待校对”并列出具体问题。
+5. **缓存与人工校对**：译文按论文 `id` 与原文哈希缓存在 `papers/translations.json`，原文变化后自动失效；
+   人工修改后将该条目的 `"reviewed"` 设为 `true`，此后不会被覆盖。
+
+使用方式：网页中勾选“中英对照”、点击“翻译本页”或单篇论文的“中文翻译”；命令行
+`python -m genome_literature translate [--ml] [--new] [--id ID] [-n 50] [--all] [--force]`，
+`python -m genome_literature translate-text "标题" "摘要"` 可单独测试一段文字；`run-pipeline` 会自动翻译新增论文
+（`TRANSLATE_NEW_PAPERS=0` 关闭，`TRANSLATE_MAX_PER_RUN` 控制每次上限）。
+
 ## 调整方法
 
 - **扩大/缩小检索范围**：编辑 `config.SEARCH_TOPICS`（组内 OR、组间 AND）。
@@ -46,4 +69,5 @@ readme_generator.py (README.md + docs/papers/*.md) · summarizer.py + email_noti
 
 - `.github/workflows/update.yml`：每周一运行增量更新，提交 `papers/`、`README.md`、`docs/papers/`；手动触发时可勾选 backfill。
 - `.github/workflows/ci.yml`：在 Python 3.9 与 3.12 上运行测试。
-- 可选 Secrets：`NCBI_API_KEY`、`NCBI_EMAIL`、`SEMANTIC_SCHOLAR_API_KEY`、`SMTP_*`、`EMAIL_FROM`、`EMAIL_RECIPIENTS`。
+- 可选 Secrets：`NCBI_API_KEY`、`NCBI_EMAIL`、`SEMANTIC_SCHOLAR_API_KEY`、`SMTP_*`、`EMAIL_FROM`、`EMAIL_RECIPIENTS`、
+  `TRANSLATE_API_KEY`、`TRANSLATE_API_BASE`、`TRANSLATE_MODEL`（配置后每周更新会自动翻译新论文）。

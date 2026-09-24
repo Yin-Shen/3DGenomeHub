@@ -47,6 +47,9 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
           EMAIL_RECIPIENTS: ${{ secrets.EMAIL_RECIPIENTS }}
+          TRANSLATE_API_KEY: ${{ secrets.TRANSLATE_API_KEY }}
+          TRANSLATE_API_BASE: ${{ secrets.TRANSLATE_API_BASE }}
+          TRANSLATE_MODEL: ${{ secrets.TRANSLATE_MODEL }}
           BACKFILL: ${{ github.event.inputs.backfill }}
         run: |
           if [ "$BACKFILL" = "true" ]; then

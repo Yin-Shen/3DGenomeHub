@@ -12,7 +12,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from . import __version__, config
+from . import __version__, config, translator
 from .analyzer import analyze_papers
 from .categorizer import get_statistics
 from .pipeline import last_new_papers, refresh_annotations, run_pipeline
@@ -213,6 +213,62 @@ def export(
 def analyze() -> None:
     """Print the research-landscape summary."""
     console.print(analyze_papers(_require_papers())["research_summary"])
+
+
+@app.command()
+def translate(
+    ml_only: bool = typer.Option(False, "--ml", help="Only AI/ML papers"),
+    new_only: bool = typer.Option(False, "--new", help="Only papers added by the last update"),
+    ids: Optional[list[str]] = typer.Option(None, "--id", help="Paper id (repeatable)"),
+    limit: int = typer.Option(100, "--limit", "-n", help="Maximum papers to translate in this run"),
+    no_limit: bool = typer.Option(False, "--all", help="Translate every selected paper"),
+    force: bool = typer.Option(False, "--force", help="Re-translate even if a translation exists (reviewed entries are kept)"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Academic Chinese translation of titles and abstracts (cached in papers/translations.json)."""
+    _setup_logging(verbose)
+    if not translator.is_configured():
+        console.print("[red]未配置翻译接口：请在 .env 中设置 TRANSLATE_API_KEY、TRANSLATE_API_BASE、TRANSLATE_MODEL。[/]")
+        raise typer.Exit(1)
+    papers = _require_papers()
+    selected = papers
+    if ids:
+        wanted = set(ids)
+        selected = [p for p in selected if p["id"] in wanted]
+    if new_only:
+        selected = last_new_papers(selected)
+    if ml_only:
+        selected = [p for p in selected if p.get("track") == "ml"]
+    selected = sorted(selected, key=lambda p: (p.get("track") == "ml", p.get("date") or ""), reverse=True)
+    console.print(f"Translating with {config.TRANSLATE_MODEL} @ {config.TRANSLATE_API_BASE} …")
+    stats = translator.translate_papers(selected, force=force, limit=None if no_limit else limit)
+    console.print(f"[green]Translated {stats['translated']}[/] · needs review {stats['needs_review']} · "
+                  f"failed {stats['failed']} · left for later {stats['skipped_over_limit']}")
+    for err in stats["errors"][:5]:
+        console.print(f"  [yellow]{err}[/]")
+    if stats["translated"]:
+        write_outputs(papers, last_new_papers(papers))
+        console.print("README.md and topic pages updated with Chinese titles.")
+
+
+@app.command(name="translate-text")
+def translate_text_cmd(
+    title: str = typer.Argument(..., help="English title"),
+    abstract: str = typer.Argument("", help="English abstract"),
+) -> None:
+    """Translate an arbitrary title/abstract and show the automatic checks."""
+    try:
+        entry = translator.translate_text(title, abstract)
+    except translator.TranslationError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+    console.print(f"[bold]{entry['title_zh']}[/]\n\n{entry['abstract_zh']}\n")
+    if entry["issues"]:
+        console.print("[yellow]自动检查发现以下问题，请人工校对：[/]")
+        for issue in entry["issues"]:
+            console.print(f"  - {issue}")
+    else:
+        console.print("[green]自动检查通过（名称/缩写、数值、术语、完整性）[/]")
 
 
 @app.command(name="send-email")

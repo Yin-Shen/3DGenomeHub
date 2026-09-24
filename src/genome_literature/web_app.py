@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, config
+from . import __version__, config, translator
 from .analyzer import analyze_papers
 from .categorizer import get_statistics
 from .email_notifier import send_digest_email
@@ -46,6 +46,24 @@ def get_papers() -> list[dict[str, Any]]:
             _cache["papers"] = load_papers() if mtime else []
             _cache["mtime"] = mtime
         return _cache["papers"]
+
+
+_tr_cache: dict[str, Any] = {"mtime": None, "data": {}}
+
+
+def get_translations() -> dict[str, dict[str, Any]]:
+    """Translation cache from disk, re-read only when translations.json changes."""
+    path = config.TRANSLATIONS_JSON
+    mtime = path.stat().st_mtime if path.exists() else None
+    with _cache_lock:
+        if mtime != _tr_cache["mtime"]:
+            _tr_cache["data"] = translator.load_cache() if mtime else {}
+            _tr_cache["mtime"] = mtime
+        return _tr_cache["data"]
+
+
+def papers_payload() -> list[dict[str, Any]]:
+    return translator.attach_translations(get_papers(), get_translations())
 
 
 def _progress(msg: str) -> None:
@@ -101,7 +119,7 @@ class GUIHandler(BaseHTTPRequestHandler):
         routes = {
             "/": self._home,
             "/api/status": self._api_status,
-            "/api/papers": lambda: self._json(get_papers()),
+            "/api/papers": lambda: self._json(papers_payload()),
             "/api/stats": self._api_stats,
             "/api/digest": self._api_digest,
             "/api/analysis": lambda: self._json(analyze_papers(get_papers())),
@@ -125,6 +143,12 @@ class GUIHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/search":
             query = parse_qs(body).get("q", [""])[0]
             self._json(search_papers(get_papers(), query, limit=200))
+            return
+        if parsed.path == "/api/translate":
+            self._api_translate(body)
+            return
+        if parsed.path == "/api/translate-batch":
+            self._api_translate_batch(body)
             return
         actions: dict[str, tuple[str, Callable[[], str]]] = {
             "/api/fetch": ("Update", _pipeline_job(skip_email=True)),
@@ -158,6 +182,50 @@ class GUIHandler(BaseHTTPRequestHandler):
         ok = send_digest_email(new, generate_digest(new, papers))
         return "Email digest sent." if ok else "Email not sent — check SMTP settings in .env."
 
+    # -- translation ---------------------------------------------------------
+    @staticmethod
+    def _requested_ids(body: str) -> list[str]:
+        try:
+            data = json.loads(body or "{}")
+        except ValueError:
+            return []
+        ids = data.get("ids") or ([data["id"]] if data.get("id") else [])
+        return [str(i) for i in ids][:200]
+
+    def _api_translate(self, body: str) -> None:
+        ids = self._requested_ids(body)
+        paper = next((p for p in get_papers() if ids and p["id"] == ids[0]), None)
+        if paper is None:
+            self._json({"ok": False, "message": "Paper not found"})
+            return
+        try:
+            entry = translator.translate_paper(paper)
+        except translator.TranslationError as exc:
+            self._json({"ok": False, "message": str(exc)})
+            return
+        self._json({"ok": True, "translation": entry})
+
+    def _api_translate_batch(self, body: str) -> None:
+        wanted = set(self._requested_ids(body))
+        papers = [p for p in get_papers() if p["id"] in wanted]
+        if not translator.is_configured():
+            self._json({"ok": False, "message": "未配置翻译接口：请在 .env 中设置 TRANSLATE_API_KEY"})
+            return
+
+        def job() -> str:
+            stats = translator.translate_papers(papers, progress=_progress)
+            msg = f"翻译完成：{stats['translated']} 篇"
+            if stats["needs_review"]:
+                msg += f"，其中 {stats['needs_review']} 篇标记为待校对"
+            if stats["failed"]:
+                msg += f"，{stats['failed']} 篇失败（{stats['errors'][0][:120]}）"
+            return msg
+
+        if start_job("Translation", job):
+            self._json({"ok": True, "message": f"Translating {len(papers)} papers…"})
+        else:
+            self._json({"ok": False, "message": f"Busy: {_status.get('job')} is still running"})
+
     # -- endpoints -----------------------------------------------------------
     def _api_status(self) -> None:
         self._json({k: (list(v) if isinstance(v, deque) else v) for k, v in _status.items()})
@@ -173,6 +241,11 @@ class GUIHandler(BaseHTTPRequestHandler):
             tracks=config.TRACKS,
             category_descriptions={k: v["description"] for k, v in config.CATEGORIES.items()},
             version=__version__,
+            translation={
+                "configured": translator.is_configured(),
+                "model": config.TRANSLATE_MODEL,
+                "translated": len(get_translations()),
+            },
         )
         self._json(stats)
 
@@ -311,6 +384,13 @@ select,input[type=text],input[type=search]{width:100%;background:var(--panel2);b
 .tag.m{color:var(--ml)}
 .abs{font-size:12.8px;color:#a9b3c9;margin-top:5px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;cursor:pointer}
 .abs.open{display:block}
+.zh-title{font-size:14.5px;color:#f3e3b3;margin:2px 0 4px;line-height:1.45}
+.abs.zh-abs{color:#e3d6b0}
+.b.review{background:#4a2b12;color:#fdba74;cursor:help}
+button.tr{background:none;border:none;color:#fbbf24;font-size:12.5px;padding:0}
+button.tr:disabled{color:var(--dim)}
+.toolbar .right{display:flex;align-items:center;gap:10px}
+.toolbar label.check{margin:0}
 .links{display:flex;flex-wrap:wrap;gap:12px;margin-top:7px;font-size:12.5px}
 .pager{display:flex;justify-content:center;gap:5px;flex-wrap:wrap;margin-top:12px}
 .pager button{background:var(--panel);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:5px 11px;font-size:12px}
@@ -395,6 +475,9 @@ footer{color:var(--dim);text-align:center;font-size:12px;padding:10px}
       <div class="searchbar"><input type="search" id="q" placeholder='Search title, abstract, authors, venue, tags — e.g. Hi-C transformer, "loop extrusion"'></div>
       <div class="toolbar">
         <span id="info">Loading…</span>
+        <span class="right">
+        <label class="check" title="Show Chinese translations of titles and abstracts"><input type="checkbox" id="showZh"> 中英对照</label>
+        <button class="btn" id="btnTrPage" title="Translate the papers on this page into Chinese (academic translation)">翻译本页</button>
         <select id="sort">
           <option value="relevance">Sort: relevance</option>
           <option value="newest">Sort: newest</option>
@@ -402,6 +485,7 @@ footer{color:var(--dim);text-align:center;font-size:12px;padding:10px}
           <option value="cited">Sort: most cited</option>
           <option value="title">Sort: title</option>
         </select>
+        </span>
       </div>
       <div id="list"></div>
       <div class="pager" id="pager"></div>
@@ -415,7 +499,7 @@ footer{color:var(--dim);text-align:center;font-size:12px;padding:10px}
 
 <script>
 const PER_PAGE = 25;
-const S = {papers: [], stats: {}, newIds: new Set(), f: {q: '', track: '', cat: '', method: '', source: '', yFrom: 0, yTo: 9999, onlyNew: false, onlyPre: false, onlyCur: false, onlyAbs: false}, sort: 'relevance', page: 1, view: []};
+const S = {showZh: (() => { try { return localStorage.getItem('showZh') === '1'; } catch (e) { return false; } })(), papers: [], stats: {}, newIds: new Set(), f: {q: '', track: '', cat: '', method: '', source: '', yFrom: 0, yTo: 9999, onlyNew: false, onlyPre: false, onlyCur: false, onlyAbs: false}, sort: 'relevance', page: 1, view: []};
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
 const TRACK_NAMES = {ml: 'AI / ML', computational: 'Computational', experimental: 'Experimental & Biology'};
@@ -460,9 +544,9 @@ function renderSidebar() {
 function tokens(q) { return [...q.matchAll(/"([^"]+)"|(\S+)/g)].map(m => (m[1] || m[2]).toLowerCase()); }
 
 function searchScore(p, terms) {
-  const title = (p.title || '').toLowerCase();
+  const title = [p.title, p.title_zh].join(' ').toLowerCase();
   const tags = [...(p.categories || []), ...(p.dl_methods || []), ...(p.tools || []), ...(p.keywords || [])].join(' ').toLowerCase();
-  const other = [p.abstract, (p.authors || []).join(' '), p.journal, p.doi].join(' ').toLowerCase();
+  const other = [p.abstract, p.abstract_zh, (p.authors || []).join(' '), p.journal, p.doi].join(' ').toLowerCase();
   let score = 0;
   for (const t of terms) {
     if (title.includes(t)) score += 3; else if (tags.includes(t)) score += 2; else if (other.includes(t)) score += 1; else return -1;
@@ -507,6 +591,7 @@ function card(p) {
   if (S.newIds.has(p.id)) badges.push('<span class="b new">NEW</span>');
   if (p.is_preprint) badges.push('<span class="b pre">PREPRINT</span>');
   if (p.curated) badges.push('<span class="b cur">LANDMARK</span>');
+  if (S.showZh && p.zh_needs_review) badges.push(`<span class="b review" title="${esc((p.zh_issues || []).join('\n'))}">译文待校对</span>`);
   const tags = (p.categories || []).map(c => `<span class="tag" data-cat="${esc(c)}">${esc(c)}</span>`)
     .concat((p.dl_methods || []).map(m => `<span class="tag m" data-method="${esc(m)}">${esc(m)}</span>`)).join('');
   const links = [];
@@ -515,13 +600,18 @@ function card(p) {
   if (p.arxiv_id) links.push(`<a href="https://arxiv.org/abs/${esc(p.arxiv_id)}" target="_blank" rel="noopener">arXiv</a>`);
   if (p.pdf_url) links.push(`<a href="${esc(p.pdf_url)}" target="_blank" rel="noopener">PDF</a>`);
   links.push(`<a href="https://scholar.google.com/scholar?q=${encodeURIComponent(p.title || '')}" target="_blank" rel="noopener">Scholar</a>`);
+  if (!p.title_zh) links.push(`<button class="tr" data-tr="${esc(p.id)}">中文翻译</button>`);
+  else if (!S.showZh) links.push('<button class="tr" data-trtoggle="1">显示中文</button>');
+  const zh = S.showZh && p.title_zh;
   const cites = p.citations ? ` · ${p.citations} citations` : '';
   return `<article class="card">
     <div class="badges">${badges.join('')}<span class="rel" title="Relevance score (0-100)">relevance ${p.relevance ?? '–'}</span></div>
     <h2>${p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.title)}</a>` : esc(p.title)}</h2>
+    ${zh ? `<div class="zh-title" lang="zh-CN">${esc(p.title_zh)}</div>` : ''}
     <div class="meta">${esc(authors)} · <i>${esc(p.journal || 'n/a')}</i> · ${esc(p.date || p.year || '')}${cites}</div>
     <div class="tags">${tags}</div>
     ${p.abstract ? `<p class="abs" title="Click to expand">${esc(p.abstract)}</p>` : ''}
+    ${zh && p.abstract_zh ? `<p class="abs zh-abs" lang="zh-CN" title="点击展开">${esc(p.abstract_zh)}</p>` : ''}
     <div class="links">${links.join('')}</div>
   </article>`;
 }
@@ -550,8 +640,10 @@ function setFilter(key, value) {
 }
 
 document.addEventListener('click', e => {
-  const t = e.target.closest('[data-track],[data-cat],[data-method],[data-page],[data-act],.abs');
+  const t = e.target.closest('[data-track],[data-cat],[data-method],[data-page],[data-act],[data-tr],[data-trtoggle],.abs');
   if (!t) return;
+  if (t.dataset.tr) { translateOne(t.dataset.tr, t); return; }
+  if (t.dataset.trtoggle) { setShowZh(true); return; }
   if (t.classList.contains('abs')) { t.classList.toggle('open'); return; }
   if (t.dataset.act) { runAction(t.dataset.act); return; }
   if (t.dataset.page) { S.page = +t.dataset.page; render(); window.scrollTo({top: 0, behavior: 'smooth'}); return; }
@@ -567,6 +659,38 @@ $('source').addEventListener('change', e => { S.f.source = e.target.value; S.pag
 $('yFrom').addEventListener('change', e => { S.f.yFrom = +e.target.value || 0; S.page = 1; apply(); });
 $('yTo').addEventListener('change', e => { S.f.yTo = +e.target.value || 9999; S.page = 1; apply(); });
 for (const id of ['onlyNew', 'onlyPre', 'onlyCur', 'onlyAbs']) $(id).addEventListener('change', e => { S.f[id] = e.target.checked; S.page = 1; apply(); });
+function setShowZh(on) {
+  S.showZh = on; $('showZh').checked = on;
+  try { localStorage.setItem('showZh', on ? '1' : '0'); } catch (e) {}
+  render();
+}
+$('showZh').checked = S.showZh;
+$('showZh').addEventListener('change', e => setShowZh(e.target.checked));
+
+async function translateOne(id, button) {
+  button.disabled = true; button.textContent = '翻译中…';
+  try {
+    const r = await fetch('/api/translate', {method: 'POST', headers: {'X-Requested-With': '3DGenomeHub', 'Content-Type': 'application/json'}, body: JSON.stringify({id})});
+    const d = await r.json();
+    if (!d.ok) { setStatus({status: 'error', message: d.message}); button.disabled = false; button.textContent = '中文翻译'; return; }
+    const p = S.papers.find(x => x.id === id);
+    if (p) Object.assign(p, {title_zh: d.translation.title_zh, abstract_zh: d.translation.abstract_zh, zh_needs_review: d.translation.needs_review && !d.translation.reviewed, zh_issues: d.translation.issues || []});
+    setStatus({status: 'done', message: d.translation.needs_review ? '翻译完成（自动检查发现问题，已标记“译文待校对”）' : '翻译完成'});
+    setShowZh(true);
+  } catch (err) {
+    setStatus({status: 'error', message: '翻译失败：' + err}); button.disabled = false; button.textContent = '中文翻译';
+  }
+}
+
+$('btnTrPage').addEventListener('click', async () => {
+  const ids = S.view.slice((S.page - 1) * PER_PAGE, S.page * PER_PAGE).filter(p => !p.title_zh).map(p => p.id);
+  if (!ids.length) { setShowZh(true); setStatus({status: 'done', message: '本页论文均已有中文译文'}); return; }
+  const r = await fetch('/api/translate-batch', {method: 'POST', headers: {'X-Requested-With': '3DGenomeHub', 'Content-Type': 'application/json'}, body: JSON.stringify({ids})});
+  const d = await r.json();
+  setStatus({status: d.ok ? 'running' : 'error', message: d.message});
+  if (d.ok) { S.showZh = true; $('showZh').checked = true; try { localStorage.setItem('showZh', '1'); } catch (e) {} if (!poll) poll = setInterval(checkStatus, 1500); }
+});
+
 $('reset').addEventListener('click', () => {
   S.f = {q: '', track: '', cat: '', method: '', source: '', yFrom: 0, yTo: 9999, onlyNew: false, onlyPre: false, onlyCur: false, onlyAbs: false};
   $('q').value = ''; for (const id of ['onlyNew', 'onlyPre', 'onlyCur', 'onlyAbs']) $(id).checked = false;

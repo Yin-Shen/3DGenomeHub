@@ -71,4 +71,6 @@ def tmp_project(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "TEMPLATE_DIR", ROOT / "templates")
     monkeypatch.setattr(config, "EMAIL_RECIPIENTS", [])
     monkeypatch.setattr(config, "HOST_MIN_INTERVAL", {})
+    monkeypatch.setattr(config, "TRANSLATIONS_JSON", papers / "translations.json")
+    monkeypatch.setattr(config, "TRANSLATE_API_KEY", "")
     return tmp_path

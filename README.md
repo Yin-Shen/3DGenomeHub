@@ -204,6 +204,8 @@ python -m genome_literature stats
 python -m genome_literature export --format bib   # json / csv / bib
 python -m genome_literature rebuild               # re-score and re-categorize after editing config.py
 python -m genome_literature serve                 # web GUI
+python -m genome_literature translate --ml -n 50  # academic Chinese translation (see below)
+python -m genome_literature translate-text "Title" "Abstract"
 ```
 
 **How papers are selected.** Topic queries (`SEARCH_TOPICS` in `config.py`) run against PubMed, Europe PMC
@@ -213,9 +215,18 @@ pass a weighted threshold, with penalties for look-alikes (Hi-C genome-assembly 
 maps, transactivation domains). Records are merged across databases by DOI, PMID, arXiv ID and normalized
 title, then tagged with an AI/ML track, architecture families (CNN, Transformer, GNN, …) and up to three topics.
 
+**Chinese academic translation (中文学术翻译).** Set `TRANSLATE_API_KEY` (plus `TRANSLATE_API_BASE` and
+`TRANSLATE_MODEL` for providers other than DeepSeek; any OpenAI-compatible API works) in `.env`. Titles and
+abstracts are translated with a curated 3D-genome / deep-learning glossary at temperature 0; every result is
+checked automatically (acronyms, gene and tool names, numbers, glossary terms, completeness) and corrected once
+if needed. Translations that still fail a check are marked 译文待校对 for manual proofreading. Results are cached
+in `papers/translations.json`; set `"reviewed": true` on a corrected entry to lock it. In the web app use
+**中英对照**, **翻译本页** or the **中文翻译** button on a paper; `run-pipeline` translates new papers automatically.
+
 **Automation.** `.github/workflows/update.yml` runs every Monday, commits `papers/`, this README and
 `docs/papers/`, and emails a digest when SMTP secrets are set. Optional secrets: `NCBI_API_KEY`,
-`NCBI_EMAIL`, `SEMANTIC_SCHOLAR_API_KEY`, `SMTP_*`, `EMAIL_FROM`, `EMAIL_RECIPIENTS` (see `.env.example`).
+`NCBI_EMAIL`, `SEMANTIC_SCHOLAR_API_KEY`, `SMTP_*`, `EMAIL_FROM`, `EMAIL_RECIPIENTS`, `TRANSLATE_API_KEY`,
+`TRANSLATE_API_BASE`, `TRANSLATE_MODEL` (see `.env.example`).
 
 Architecture notes: [docs/architecture.md](docs/architecture.md) · Landmark papers: `papers/curated_dois.txt`
 

@@ -11,7 +11,7 @@ from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from . import config
+from . import config, translator
 from .relevance import track_label
 from .summarizer import short_authors
 
@@ -25,6 +25,7 @@ _FALLBACK_TEMPLATE = """<!DOCTYPE html><html><head><meta charset="utf-8"></head>
 {% for p in papers %}
 <div style="margin:0 0 14px;padding-left:10px;border-left:3px solid {{ '#7c3aed' if p.track == 'ml' else '#cbd5e1' }}">
 <a href="{{ p.url }}" style="color:#1d4ed8;font-weight:600;text-decoration:none">{{ p.title }}</a>
+{% if p.title_zh %}<div style="font-size:13px;color:#374151">{{ p.title_zh }}</div>{% endif %}
 <div style="font-size:12px;color:#6b7280">{{ authors(p) }} · {{ p.journal }} ({{ p.date or p.year }}) · {{ label(p.track) }}</div>
 </div>
 {% endfor %}
@@ -77,7 +78,7 @@ def send_digest_email(new_papers: list[dict[str, Any]], digest: dict[str, Any]) 
 
 def render_email_html(new_papers: list[dict[str, Any]], digest: dict[str, Any]) -> str:
     """Render the HTML digest (templates/email_digest.html, or a built-in fallback)."""
-    ranked = digest.get("new_papers") or new_papers
+    ranked = translator.attach_translations(digest.get("new_papers") or new_papers)
     shown = ranked[: config.EMAIL_MAX_PAPERS]
     shown_ids = {p.get("id") for p in shown}
     by_category = {
