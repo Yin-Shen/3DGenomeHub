@@ -17,8 +17,13 @@ from .matching import TermSet, normalize_text
 
 logger = logging.getLogger(__name__)
 
+FACET_MIN_SCORE = 3.0
+
 _CATEGORY_TERMS: dict[str, TermSet] = {
     name: TermSet(info["terms"]) for name, info in config.CATEGORIES.items()
+}
+_ABSTRACT_TERMS: dict[str, TermSet] = {
+    name: TermSet(info["abstract_terms"]) for name, info in config.CATEGORIES.items() if info.get("abstract_terms")
 }
 
 
@@ -36,6 +41,8 @@ def score_categories(paper: dict[str, Any]) -> dict[str, float]:
             score, _ = terms.score(title, "", title_weight=1.0)
         else:
             score, _ = terms.score(title, body)
+        if name in _ABSTRACT_TERMS:
+            score += _ABSTRACT_TERMS[name].score("", abstract)[0]
         if pub_types & set(info.get("pub_types", [])):
             score += 3
         if score > 0:
@@ -44,14 +51,17 @@ def score_categories(paper: dict[str, Any]) -> dict[str, float]:
 
 
 def categorize_paper(paper: dict[str, Any]) -> list[str]:
+    """Up to MAX_CATEGORIES_PER_PAPER topics, plus facet categories (article type) that pass on their own."""
     scores = score_categories(paper)
-    if not scores:
-        return [config.FALLBACK_CATEGORY]
-    ranked = sorted(scores.items(), key=lambda kv: (-kv[1], list(config.CATEGORIES).index(kv[0])))
-    best = ranked[0][1]
-    cutoff = max(config.MIN_CATEGORY_SCORE, best * config.CATEGORY_RELATIVE_CUTOFF)
-    chosen = [name for name, score in ranked if score >= cutoff][: config.MAX_CATEGORIES_PER_PAPER]
-    return chosen or [config.FALLBACK_CATEGORY]
+    facets = [name for name, score in scores.items()
+              if config.CATEGORIES[name].get("facet") and score >= FACET_MIN_SCORE]
+    topical = {name: score for name, score in scores.items() if not config.CATEGORIES[name].get("facet")}
+    chosen: list[str] = []
+    if topical:
+        ranked = sorted(topical.items(), key=lambda kv: (-kv[1], list(config.CATEGORIES).index(kv[0])))
+        cutoff = max(config.MIN_CATEGORY_SCORE, ranked[0][1] * config.CATEGORY_RELATIVE_CUTOFF)
+        chosen = [name for name, score in ranked if score >= cutoff][: config.MAX_CATEGORIES_PER_PAPER]
+    return (chosen or [config.FALLBACK_CATEGORY]) + facets
 
 
 def categorize_papers(papers: list[dict[str, Any]]) -> list[dict[str, Any]]:

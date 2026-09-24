@@ -9,6 +9,7 @@ relevance-ranked backfills.
 
 from __future__ import annotations
 
+import json
 import logging
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
@@ -115,7 +116,7 @@ def fetch_pubmed(
     }
     if since:
         params.update(datetype="edat", mindate=since.replace("-", "/"), maxdate=(until or today()).replace("-", "/"))
-    data = client.get(f"{EUTILS}/esearch.fcgi", params=params).json()
+    data = _json(client.get(f"{EUTILS}/esearch.fcgi", params=params))
     ids = data.get("esearchresult", {}).get("idlist", [])
     papers: list[Record] = []
     for start in range(0, len(ids), 200):
@@ -199,6 +200,16 @@ def parse_pubmed_article(el: ET.Element) -> Record | None:
 
 
 def _pubmed_date(art: ET.Element, el: ET.Element) -> str:
+    """Electronic date, else issue date; an issue date in the future falls back to the PubMed entry date."""
+    date = _pubmed_issue_date(art)
+    hist = el.find("PubmedData/History/PubMedPubDate[@PubStatus='pubmed']")
+    entry = _ymd(hist.findtext("Year"), hist.findtext("Month"), hist.findtext("Day")) if hist is not None else ""
+    if entry and (not date or date > today()):
+        return entry
+    return date
+
+
+def _pubmed_issue_date(art: ET.Element) -> str:
     ad = art.find("ArticleDate")
     if ad is not None and ad.findtext("Year"):
         return _ymd(ad.findtext("Year"), ad.findtext("Month"), ad.findtext("Day"))
@@ -210,9 +221,6 @@ def _pubmed_date(art: ET.Element, el: ET.Element) -> str:
         tokens = medline_date.replace("-", " ").split()
         if tokens and tokens[0][:4].isdigit():
             return _ymd(tokens[0][:4], tokens[1] if len(tokens) > 1 else None, None)
-    hist = el.find("PubmedData/History/PubMedPubDate[@PubStatus='pubmed']")
-    if hist is not None and hist.findtext("Year"):
-        return _ymd(hist.findtext("Year"), hist.findtext("Month"), hist.findtext("Day"))
     return ""
 
 
@@ -368,7 +376,7 @@ def fetch_biorxiv_recent(
     latest: dict[str, tuple[int, Record]] = {}
     cursor = 0
     while cursor < max_records:
-        data = client.get(f"{BIORXIV_DETAILS}/{since}/{until}/{cursor}/json").json()
+        data = _json(client.get(f"{BIORXIV_DETAILS}/{since}/{until}/{cursor}/json"))
         messages = data.get("messages") or [{}]
         collection = data.get("collection") or []
         if not collection:
@@ -690,8 +698,13 @@ def fetch_all_papers(
     report = report if report is not None else {}
     report.setdefault("by_source", {})
     report.setdefault("errors", [])
+    report.setdefault("skipped", {})
     collected: list[Record] = []
+    consecutive_failures: dict[str, int] = {}
     for i, (source, label, fn) in enumerate(jobs, 1):
+        if consecutive_failures.get(source, 0) >= config.SOURCE_FAILURE_LIMIT:
+            report["skipped"][source] = report["skipped"].get(source, 0) + 1
+            continue
         msg = f"[{i}/{len(jobs)}] {source}: {label[:90]}"
         logger.info(msg)
         if progress:
@@ -701,10 +714,17 @@ def fetch_all_papers(
         except Exception as exc:
             logger.error("  -> %s failed: %s", source, exc)
             report["errors"].append({"source": source, "query": label, "error": str(exc)[:300]})
+            consecutive_failures[source] = consecutive_failures.get(source, 0) + 1
+            if consecutive_failures[source] == config.SOURCE_FAILURE_LIMIT:
+                logger.warning("  %s failed %d times in a row; skipping its remaining queries this run",
+                               source, config.SOURCE_FAILURE_LIMIT)
             continue
+        consecutive_failures[source] = 0
         logger.info("  -> %d records", len(papers))
         report["by_source"][source] = report["by_source"].get(source, 0) + len(papers)
         collected.extend(papers)
+    for source, n in report["skipped"].items():
+        logger.warning("Skipped %d %s queries after repeated failures", n, source)
 
     unique = deduplicate(collected)
     report["fetched_records"] = len(collected)
@@ -716,6 +736,19 @@ def fetch_all_papers(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _json(resp: httpx.Response) -> Any:
+    """Decode JSON (tolerating raw control characters, which E-utilities emits),
+    reporting what was returned instead when it is not JSON."""
+    try:
+        return json.loads(resp.text, strict=False)
+    except ValueError as exc:
+        snippet = " ".join(resp.text[:160].split())
+        raise ValueError(
+            f"non-JSON response from {resp.url.host} (HTTP {resp.status_code}, "
+            f"{resp.headers.get('content-type', 'no content-type')}): {snippet!r}"
+        ) from exc
+
 
 def _in_window(rec: Record, since: str | None, until: str | None) -> bool:
     if not since or not rec.get("date"):

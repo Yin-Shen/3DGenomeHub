@@ -17,7 +17,6 @@ from .analyzer import analyze_papers
 from .categorizer import get_statistics
 from .pipeline import last_new_papers, refresh_annotations, run_pipeline
 from .readme_generator import write_outputs
-from .records import PaperIndex
 from .relevance import track_label
 from .search import search_papers, to_bibtex, to_csv
 from .storage import load_papers, save_papers
@@ -118,13 +117,13 @@ def rebuild(verbose: bool = typer.Option(False, "--verbose", "-v")) -> None:
     """Re-score, deduplicate and re-categorize the stored database (after editing config.py)."""
     _setup_logging(verbose)
     papers = load_papers()
-    merged = PaperIndex(papers).papers
-    for p in merged:
+    for p in papers:
         p.setdefault("first_seen", (p.get("fetched_at") or "")[:10])
-    kept, pruned = refresh_annotations(merged)
+    kept, pruned = refresh_annotations(papers)
     save_papers(kept)
     write_outputs(kept, last_new_papers(kept))
-    console.print(f"[green]Rebuilt database: {len(kept)} papers kept, {len(papers) - len(merged)} duplicates merged, "
+    merged = len(papers) - len(kept) - len(pruned)
+    console.print(f"[green]Rebuilt database: {len(kept)} papers kept, {merged} duplicates merged, "
                   f"{len(pruned)} pruned.[/]")
 
 

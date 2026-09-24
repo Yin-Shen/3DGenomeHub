@@ -26,7 +26,7 @@ from __future__ import annotations
 import html
 import re
 import unicodedata
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
 from .matching import normalize_text
@@ -35,7 +35,7 @@ SOURCE_PRIORITY = ["pubmed", "europepmc", "semantic_scholar", "crossref", "biorx
 
 PREPRINT_SERVERS = ("biorxiv", "medrxiv", "arxiv", "research square", "preprints", "ssrn", "chemrxiv")
 
-_TAG_RE = re.compile(r"<[^>]+>")
+_TAG_RE = re.compile(r"</?[A-Za-z][\w:.-]*(?:\s[^<>]*)?/?>")
 _BLOCK_TAG_RE = re.compile(r"</?(?:p|h\d|br|div|sec|title|jats:p|jats:title|jats:sec|li|ul|ol)\b[^>]*>", re.I)
 _HEADING_RE = re.compile(r"<(?:h\d|jats:title|title)\b[^>]*>(.*?)</(?:h\d|jats:title|title)>", re.I | re.S)
 _LEADING_ABSTRACT_RE = re.compile(r"^\s*(?:abstract|summary)\s*[:.]?\s+", re.I)
@@ -56,9 +56,10 @@ def clean_text(text: Any) -> str:
     if not text:
         return ""
     s = str(text)
-    s = _BLOCK_TAG_RE.sub(" ", s)
-    s = _TAG_RE.sub("", s)
-    s = html.unescape(html.unescape(s))
+    for _ in range(2):
+        s = _BLOCK_TAG_RE.sub(" ", s)
+        s = _TAG_RE.sub("", s)
+        s = html.unescape(s)
     return normalize_text(s)
 
 
@@ -160,6 +161,11 @@ def normalize_record(paper: dict[str, Any]) -> dict[str, Any]:
         p["doi"] = normalize_doi(old_id)
 
     p["date"] = normalize_date(p.get("date"), p.get("year"))
+    horizon = (datetime.now(timezone.utc) + timedelta(days=60)).strftime("%Y-%m-%d")
+    if p["date"] > horizon:
+        seen = str(p.get("first_seen") or p.get("fetched_at") or "")[:10]
+        p["date"] = seen if len(seen) == 10 else today()
+        p["year"] = int(p["date"][:4])
     try:
         p["year"] = int(p.get("year") or (p["date"][:4] if p["date"] else 0))
     except (TypeError, ValueError):
